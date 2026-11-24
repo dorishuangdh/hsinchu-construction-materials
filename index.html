@@ -1244,10 +1244,10 @@ function trackedMats() {
 function batchesTracked(mid) { return (IX.bBy[mid] || []).filter(b => b.自檢追蹤 === '是'); }
 function docsOfMat(mid) { return [].concat(...batchesTracked(mid).map(b => IX.dBy[b.批次ID] || [])); }
 
-/* 送審流程（每一批進場一套）：品管查驗 → 資料送審 → 監造查驗 → 紀錄送查 → 已完成；任一階段可退件 */
-const FLOW = ['品管查驗', '資料送審', '監造查驗', '紀錄送查', '已完成'];
-const STAGE_CHIP = { '品管查驗': 'st-qc', '資料送審': 'pri', '監造查驗': 'warn', '紀錄送查': 'st-rec', '退件': 'bad', '已完成': 'ok' };
-const stageOf = b => b.送審階段 || '品管查驗';
+/* 送審流程（每一批進場一套）：尚未檢驗 → 品管查驗 → 資料送審 → 監造查驗 → 紀錄送查 → 已完成；任一階段可退件 */
+const FLOW = ['尚未檢驗', '品管查驗', '資料送審', '監造查驗', '紀錄送查', '已完成'];
+const STAGE_CHIP = { '尚未檢驗': '', '品管查驗': 'st-qc', '資料送審': 'pri', '監造查驗': 'warn', '紀錄送查': 'st-rec', '退件': 'bad', '已完成': 'ok' };
+const stageOf = b => b.送審階段 || '尚未檢驗';
 const stageLog = b => pj(b.送審紀錄) || [];
 const stageChip = (s, pre) => '<span class="chip ' + (STAGE_CHIP[s] || '') + '">' + (pre || '') + esc(s) + '</span>';
 
@@ -1339,13 +1339,13 @@ function batchFold(m, b, rv) {
   h += '<div class="bd">';
   if (rv) {
     const i = FLOW.indexOf(st), log = stageLog(b);
-    const back = st === '退件' && log.length ? (log[log.length - 1].自 || '品管查驗') : '';
+    const back = st === '退件' && log.length ? (log[log.length - 1].自 || '尚未檢驗') : '';
     h += stepper(b);
     if (st === '退件' && log.length && log[log.length - 1].備註) h += '<div class="banner" style="background:var(--bad-weak);border-color:#f0c4bf;color:#7f1d1d;margin:8px 0">退件原因：' + esc(log[log.length - 1].備註) + '</div>';
     h += '<div class="row" style="margin:10px 0">' +
       (st === '退件' ? '<button class="btn pri sm" data-to="' + esc(back) + '" onclick="setStage(\'' + b.批次ID + '\',this.dataset.to)">重新送出（回到「' + esc(back) + '」）</button>'
-        : st !== '已完成' ? '<button class="btn pri sm" data-to="' + esc(FLOW[i + 1]) + '" onclick="setStage(\'' + b.批次ID + '\',this.dataset.to)">「' + esc(st) + '」完成 → ' + esc(FLOW[i + 1]) + '</button>' : '') +
-      (st !== '退件' && st !== '已完成' ? '<button class="btn bad sm" onclick="setStage(\'' + b.批次ID + '\',\'退件\')">退件</button>' : '') +
+        : st !== '已完成' ? '<button class="btn pri sm" data-to="' + esc(FLOW[i + 1]) + '" onclick="setStage(\'' + b.批次ID + '\',this.dataset.to)">' + (st === '尚未檢驗' ? '開始品管查驗 →' : '「' + esc(st) + '」完成 → ' + esc(FLOW[i + 1])) + '</button>' : '') +
+      (st !== '退件' && st !== '已完成' && st !== '尚未檢驗' ? '<button class="btn bad sm" onclick="setStage(\'' + b.批次ID + '\',\'退件\')">退件</button>' : '') +
       '<span class="sp"></span><span class="small muted">直接改為</span><select class="inp" style="width:auto;padding:5px 30px 5px 8px;font-size:13.5px" onchange="if(this.value)setStage(\'' + b.批次ID + '\',this.value)"><option value="">—</option>' +
       (D.stages || []).filter(x => x !== st).map(x => '<option>' + esc(x) + '</option>').join('') + '</select></div>';
     if (log.length) h += '<details' + (UI.openLog === b.批次ID ? ' open' : '') + ' ontoggle="if(this.open)UI.openLog=\'' + b.批次ID + '\'"><summary>送審歷程（' + log.length + '）</summary><table class="small" style="margin-top:6px"><tbody>' +
