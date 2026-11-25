@@ -292,7 +292,8 @@ function boot() {
 }
 function setData(d) { D = d; index(); render(); }
 function index() {
-  IX = { mat: {}, stock: {}, bBy: {}, dBy: {}, tBy: {}, bat: {} };
+  IX = { mat: {}, stock: {}, bBy: {}, dBy: {}, tBy: {}, bat: {}, pBy: {} };
+  (D.purchases || []).forEach(p => (IX.pBy[p.物料ID] = IX.pBy[p.物料ID] || []).push(p));
   (D.materials || []).forEach(m => IX.mat[m.物料ID] = m);
   (D.txns || []).forEach(t => {
     (IX.tBy[t.物料ID] = IX.tBy[t.物料ID] || []).push(t);
@@ -308,6 +309,12 @@ function index() {
   Object.values(IX.dBy).forEach(a => a.sort((x, y) => num(x.序號) - num(y.序號)));
 }
 const stockOf = id => IX.stock[id] || { total: 0, v: {}, inQ: 0, outQ: 0 };
+/** 請購：未結的請購單（請購中、部分到貨）與在途數量（請購數 − 已到貨數） */
+const PO_OPEN = p => p.狀態 === '請購中' || p.狀態 === '部分到貨';
+const poRemain = p => Math.max(0, num(p.數量) - num(p.已到貨數量));
+const openPOs = mid => (IX.pBy[mid] || []).filter(PO_OPEN).sort((a, b) => (a.請購日期 + a.登錄時間).localeCompare(b.請購日期 + b.登錄時間));
+const transitOf = mid => openPOs(mid).reduce((a, p) => a + poRemain(p), 0);
+const PO_CHIP = { '請購中': 'warn', '部分到貨': 'pri', '已到貨': 'ok', '結案': '', '取消': '' };
 const SHARED = '共用配料';
 const PENDING_CONTRACT = '待合約新增';
 const aliasHtml = m => list(m.別名).length ? '<br><span class="small muted">別名：' + esc(list(m.別名).join('、')) + '</span>' : '';
@@ -343,7 +350,12 @@ function matsSorted(filter) {
   return (D.materials || []).filter(filter || (() => true)).sort((a, b) =>
     cats.indexOf(grp(a)) - cats.indexOf(grp(b)) || (typeOf(a) === '配料') - (typeOf(b) === '配料') || a.名稱.localeCompare(b.名稱, 'zh-Hant') || String(a.規格).localeCompare(String(b.規格), 'zh-Hant', {numeric: true}));
 }
-function matches(m, q) { q = (q || '').trim().toLowerCase(); return !q || (m.名稱 + ' ' + (m.別名 || '') + ' ' + m.規格 + ' ' + grp(m) + ' ' + typeOf(m) + ' ' + m.存放位置 + ' ' + (m.合約項目 || '')).toLowerCase().indexOf(q) >= 0; }
+/** 搜尋比對：以空白分開的每個關鍵字都要出現（不分大小寫、忽略全形空白） */
+function hit(text, q) {
+  const t = String(text || '').toLowerCase(), ws = String(q || '').toLowerCase().split(/[\s\u3000]+/).filter(Boolean);
+  return ws.every(w => t.indexOf(w) >= 0);
+}
+function matches(m, q) { q = (q || '').trim().toLowerCase(); return !q || hit(m.名稱 + ' ' + (m.別名 || '') + ' ' + m.規格 + ' ' + grp(m) + ' ' + typeOf(m) + ' ' + m.存放位置 + ' ' + (m.合約項目 || ''), q); }
 function allLocations() { return uniq([].concat(...(D.materials || []).map(m => list(m.存放位置)))); }
 /** 單位換算：庫存 → 換算數量（長度、面積、包裝等皆可）→ 總重量（kg） */
 function convQty(m, qty) { return m.換算係數 && m.換算單位 ? num(qty) * num(m.換算係數) : null; }
@@ -521,7 +533,8 @@ function matInfo(m) {
   const st = stockOf(m.物料ID);
   return '<div class="info"><div class="row">' + thumbHtml(m) + '<div><b>' + esc(label(m)) + '</b>' + aliasHtml(m) + '<br><span class="muted small">分類：' + esc(catLabel(grp(m))) + (typeOf(m) === '配料' && grp(m) !== SHARED ? '・配料' : '') +
     '　單位：' + esc(m.單位) + (convRule(m) ? '（' + esc(convRule(m)) + '）' : '') + '</span><br>' +
-    '目前庫存 <b>' + fmtN(st.total) + '</b> ' + esc(m.單位) + ' <span class="muted">' + esc(convText(m, st.total)) + '</span>' +
+    '實際庫存 <b>' + fmtN(st.total) + '</b> ' + esc(m.單位) + ' <span class="muted">' + esc(convText(m, st.total)) + '</span>' +
+    (transitOf(m.物料ID) > 1e-9 ? '　在途 <b style="color:var(--warn)">' + fmtN(transitOf(m.物料ID)) + '</b> ' + esc(m.單位) : '') +
     (Object.keys(st.v).length ? '<br>' + Object.keys(st.v).map(k => '<span class="chip">' + esc(k) + ' ' + fmtN(st.v[k]) + '</span>').join('') : '') +
     (m.需自檢 === '是' ? '<br><span class="chip pri">需自檢</span><span class="small muted">購買流程：' + esc(m.購買流程 || '（未設定）') + '</span>' : '') +
     '</div></div></div>';
@@ -634,38 +647,115 @@ PAGES.stock = function () {
   const c = UI.stC;
   // 有搜尋字時跨全部大類搜尋；否則只顯示選中的大類（同紀錄表）
   const ms = all.filter(m => q ? matches(m, q) : grp(m) === c);
-  const rows = groupedRows(ms, 5, m => {
-    const st = stockOf(m.物料ID), cq = convQty(m, st.total);
+  const rows = groupedRows(ms, 6, m => {
+    const st = stockOf(m.物料ID), cq = convQty(m, st.total), tr = transitOf(m.物料ID);
     const vs = Object.keys(st.v).filter(k => Math.abs(st.v[k]) > 1e-9);
     return '<tr class="it"><td>' + thumbHtml(m) + '</td><td><b>' + esc(m.名稱) + '</b>' + (m.規格 ? '<br><span class="muted small">' + esc(m.規格) + '</span>' : '') + aliasHtml(m) + (m.合約項目 ? '<br>' + contractChip(m) : '') +
       '</td><td class="small' + (list(m.存放位置).length ? '' : ' nil') + '" data-l="位置">' + list(m.存放位置).map(l => '<span class="chip">' + esc(l) + '</span>').join('') +
-      '</td><td class="num" data-l="庫存"><b style="font-size:16px;' + (st.total <= 0 ? 'color:var(--bad)' : '') + '">' + fmtN(st.total) + '</b> ' + esc(m.單位) +
+      '</td><td class="num" data-l="實際庫存"><b style="font-size:16px;' + (st.total <= 0 ? 'color:var(--bad)' : '') + '">' + fmtN(st.total) + '</b> ' + esc(m.單位) +
       (vs.length ? '<br>' + vs.map(k => '<span class="chip pri">' + esc(k) + ' ' + fmtN(st.v[k]) + '</span>').join('') : '') +
       (isWire(m) ? (lo => Math.abs(lo.total) > 1e-9 ? '<br><span class="small" style="color:var(--warn)">現場餘料 ' + fmtN(lo.total) + ' ' + esc(useUnit(m)) + '</span>' +
         (Object.keys(lo.v).filter(k => Math.abs(lo.v[k]) > 1e-9).length ? '<br>' + Object.keys(lo.v).filter(k => Math.abs(lo.v[k]) > 1e-9).map(k => '<span class="chip warn">' + esc(k) + ' ' + fmtN(lo.v[k]) + esc(useUnit(m)) + '</span>').join('') : '') : '')(leftoverOf(m.物料ID)) : '') +
+      '</td><td class="num' + (tr > 1e-9 ? '' : ' nil') + '" data-l="在途">' + (tr > 1e-9 ? '<b style="color:var(--warn)">' + fmtN(tr) + '</b> ' + esc(m.單位) + '<br><span class="muted small">' + openPOs(m.物料ID).length + ' 張請購單</span>' : '<span class="muted">—</span>') +
       '</td><td class="num' + (cq == null ? ' nil' : '') + '" data-l="總數量">' + (cq != null ? '<b>' + fmtN(cq) + '</b> ' + esc(m.換算單位) +
         '<br><span class="muted small">1 ' + esc(m.單位) + ' = ' + fmtN(m.換算係數) + ' ' + esc(m.換算單位) + '</span>' : '<span class="muted">—</span>') + '</td></tr>';
   }, null, !q);
   const btns = '<div class="cats" style="margin-top:12px">' + cats.map(x => '<button class="' + (!q && x === c ? 'on' : '') + '" data-c="' + esc(x) + '" onclick="UI.stC=this.dataset.c;UI.stQ=\'\';render()">' +
     esc(catLabel(x)) + ' <span class="cn">' + all.filter(m => grp(m) === x).length + '</span></button>').join('') + '</div>';
   return '<div class="card"><div class="row"><h2 style="margin:0">庫存總覽</h2><span class="sp"></span><span class="muted small">共 ' + all.length + ' 項</span></div>' +
-    '<input class="inp" style="margin-top:10px" placeholder="🔍 搜尋全部大類的材料（名稱、別名、規格、合約）" value="' + esc(q) + '" oninput="UI.stQ=this.value;rerenderKeep(this)">' + btns +
+    '<input class="inp" style="margin-top:10px" placeholder="🔍 搜尋全部大類的材料（名稱、別名、規格、合約）" value="' + esc(q) + '" id="q_stQ" oninput="UI.stQ=this.value;rerenderKeep(this)">' + btns +
     (q ? '<div class="small muted" style="margin:4px 0 8px">搜尋「' + esc(q) + '」：共 ' + ms.length + ' 項（全部大類）　<a href="#" onclick="UI.stQ=\'\';render();return false">清除搜尋</a></div>'
        : '<h3 style="margin:6px 0 8px">' + esc(catLabel(c)) + '　<span class="muted small" style="font-weight:400">' + ms.length + ' 項</span></h3>') +
-    '<div class="tbl"><table class="stk"><thead><tr><th></th><th>名稱／規格</th><th>存放位置</th><th class="num">庫存</th><th class="num">總數量（換算）</th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5" class="empty">' + (q ? '找不到符合的材料' : '尚無物料') + '</td></tr>') + '</tbody></table></div></div>';
+    '<div class="tbl"><table class="stk"><thead><tr><th></th><th>名稱／規格</th><th>存放位置</th><th class="num">實際庫存</th><th class="num">在途</th><th class="num">總數量（換算）</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="6" class="empty">' + (q ? '找不到符合的材料' : '尚無物料') + '</td></tr>') + '</tbody></table></div></div>';
 };
+/** 搜尋框輸入時重新整理畫面：中文輸入法組字中不更新，停止輸入 0.3 秒後才更新，並把游標放回原位 */
 function rerenderKeep(el) {
-  const id = el.id || ('k' + Math.random().toString(36).slice(2)); el.id = id;
-  const pos = el.selectionStart; render(); const n = document.getElementById(id);
-  if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+  if (el.__ime) return;
+  clearTimeout(rerenderKeep.t);
+  const id = el.id;
+  rerenderKeep.t = setTimeout(() => {
+    const cur = document.getElementById(id);
+    if (cur && cur.__ime) return;
+    const pos = cur ? cur.selectionStart : null;
+    render();
+    const n = document.getElementById(id);
+    if (n) { n.focus(); try { if (pos != null) n.setSelectionRange(pos, pos); } catch (e) {} }
+  }, 300);
+}
+document.addEventListener('compositionstart', e => { e.target.__ime = true; });
+document.addEventListener('compositionend', e => { e.target.__ime = false; e.target.dispatchEvent(new Event('input', { bubbles: true })); });
+
+/* ---------- 請購管理 ---------- */
+PAGES.purchase = function () {
+  const f = UI.poF || '未結', q = (UI.poQ || '').trim().toLowerCase();
+  const all = (D.purchases || []).slice().sort((a, b) => (b.請購日期 + b.登錄時間).localeCompare(a.請購日期 + a.登錄時間));
+  const ok = p => (f === '全部' || (f === '未結' ? PO_OPEN(p) : p.狀態 === f)) && (!q || hit(p.物料名稱 + ' ' + (p.備註 || '') + ' ' + (p.請購人 || ''), q));
+  const ls = all.filter(ok), cnt = s => all.filter(p => s === '未結' ? PO_OPEN(p) : p.狀態 === s).length;
+  const late = p => PO_OPEN(p) && p.預計到貨日 && p.預計到貨日 < today();
+  const rows = ls.map(p => {
+    const m = IX.mat[p.物料ID], u = esc(m ? m.單位 : '');
+    return '<tr><td class="small">' + esc(p.請購日期) + '<br><span class="muted">' + esc(p.請購人 || '') + '</span></td><td><b>' + esc(m ? label(m) : p.物料名稱) + '</b>' + (p.備註 ? '<br><span class="small muted">' + esc(p.備註) + '</span>' : '') + '</td>' +
+      '<td class="num">' + fmtN(p.數量) + ' ' + u + '</td><td class="num">' + fmtN(p.已到貨數量 || 0) + ' ' + u + '</td><td class="num">' + (PO_OPEN(p) ? '<b style="color:var(--warn)">' + fmtN(poRemain(p)) + '</b> ' + u : '—') + '</td>' +
+      '<td class="small">' + (p.預計到貨日 ? esc(p.預計到貨日) + (late(p) ? '<br><span class="chip bad">已逾期</span>' : '') : '—') + '</td>' +
+      '<td><span class="chip ' + (PO_CHIP[p.狀態] || '') + '">' + esc(p.狀態) + '</span></td><td style="white-space:nowrap">' +
+      (PO_OPEN(p) && can('receive') ? '<button class="btn sm pri" onclick="poArrive(\'' + p.請購ID + '\')">到貨登記</button> ' : '') +
+      '<button class="btn sm" onclick="poMenu(\'' + p.請購ID + '\')">⋯</button></td></tr>';
+  }).join('');
+  return '<div class="card"><div class="row"><h2 style="margin:0">請購管理</h2><span class="sp"></span><button class="btn pri" onclick="poForm()">＋ 新增請購</button></div>' +
+    '<p class="muted small">登記請購數量；材料到貨時在「材料進場／入庫」選擇對應的請購單，系統自動累計到貨數量，庫存總覽會同時顯示實際庫存與在途數量。</p>' +
+    '<div class="grid2"><input class="inp" id="q_poQ" placeholder="🔍 材料、備註、請購人" value="' + esc(UI.poQ || '') + '" oninput="UI.poQ=this.value;rerenderKeep(this)">' +
+    '<div class="tabs" style="margin:0">' + ['未結', '已到貨', '結案', '取消', '全部'].map(x => '<button class="' + (f === x ? 'on' : '') + '" onclick="UI.poF=\'' + x + '\';render()">' + x + (x !== '全部' ? ' ' + cnt(x) : '') + '</button>').join('') + '</div></div>' +
+    '<div class="tbl" style="margin-top:10px"><table><thead><tr><th>請購日期</th><th>材料</th><th class="num">請購數量</th><th class="num">已到貨</th><th class="num">在途（尚欠）</th><th>預計到貨</th><th>狀態</th><th></th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="8" class="empty">' + (f === '未結' ? '目前沒有未到貨的請購單' : '沒有符合的請購單') + '</td></tr>') + '</tbody></table></div>' +
+    '<p class="small muted">「未結」＝請購中＋部分到貨。部分到貨但不再等剩餘數量時，可按 ⋯ →「結案」，在途數量就不再計入。</p></div>';
+};
+function poForm(id) {
+  const p = id ? (D.purchases || []).find(x => x.請購ID === id) : null, m = p ? IX.mat[p.物料ID] : null;
+  openModal('<h2>' + (p ? '修改請購單' : '新增請購') + '</h2>' +
+    (p ? '<div class="info"><b>' + esc(m ? label(m) : p.物料名稱) + '</b>　已到貨 ' + fmtN(p.已到貨數量 || 0) + '</div><input type="hidden" id="poMat" value="' + p.物料ID + '">'
+       : '<label>材料</label>' + matPicker('poMat', 'poMatCh')) +
+    '<div class="grid2"><div><label>請購數量 <span id="poUnit" class="muted small">' + esc(m ? m.單位 : '') + '</span></label><input class="inp" type="number" step="any" min="0" id="poQty" value="' + esc(p ? p.數量 : '') + '"></div>' +
+    '<div><label>請購日期</label><input type="date" class="inp" id="poDate" value="' + esc(p ? p.請購日期 : today()) + '" max="' + today() + '"></div></div>' +
+    '<div class="grid2"><div><label>預計到貨日（選填）</label><input type="date" class="inp" id="poEta" value="' + esc(p ? p.預計到貨日 : '') + '"></div>' +
+    '<div><label>備註（選填）</label><input class="inp" id="poNote" placeholder="例：請購單號、廠商" value="' + esc(p ? p.備註 : '') + '"></div></div>' +
+    '<div class="row end" style="margin-top:16px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" onclick="poSave(\'' + (id || '') + '\')">儲存</button></div>');
+}
+function poMatCh() { const m = IX.mat[$('#poMat').value]; $('#poUnit').textContent = m ? m.單位 : ''; }
+async function poSave(id) {
+  const mid = $('#poMat').value, qty = num($('#poQty').value);
+  if (!mid) return toast('請選擇材料', 'err');
+  if (!(qty > 0)) return toast('請輸入請購數量', 'err');
+  try { await run('savePurchase', { id: id, materialId: mid, qty: qty, date: $('#poDate').value, eta: $('#poEta').value, note: $('#poNote').value }); closeModal(); toast(id ? '請購單已修改' : '已新增請購'); } catch (e) {}
+}
+function poArrive(id) {
+  const p = (D.purchases || []).find(x => x.請購ID === id); if (!p) return;
+  UI.rcvPO = id; UI.rcvQty = poRemain(p); go('receive');
+  setTimeout(() => { const s = $('#rcvMat'); if (s) { s.value = p.物料ID; rcvChange(); } }, 30);
+}
+function poMenu(id) {
+  const p = (D.purchases || []).find(x => x.請購ID === id); if (!p) return;
+  const arrived = num(p.已到貨數量) > 0;
+  openModal('<h2>請購單</h2><div class="info"><b>' + esc(p.物料名稱) + '</b>　請購 ' + fmtN(p.數量) + '、已到貨 ' + fmtN(p.已到貨數量 || 0) + '　<span class="chip ' + (PO_CHIP[p.狀態] || '') + '">' + esc(p.狀態) + '</span></div>' +
+    '<div class="row" style="margin-top:14px;gap:8px">' +
+    (PO_OPEN(p) || p.狀態 === '已到貨' ? '<button class="btn" onclick="closeModal();poForm(\'' + id + '\')">修改</button>' : '') +
+    (PO_OPEN(p) && arrived ? '<button class="btn" onclick="poStatus(\'' + id + '\',\'結案\')">結案（不再等剩餘數量）</button>' : '') +
+    (PO_OPEN(p) && !arrived ? '<button class="btn bad" onclick="poStatus(\'' + id + '\',\'取消\')">取消請購</button>' : '') +
+    (p.狀態 === '結案' || p.狀態 === '取消' ? '<button class="btn" onclick="poStatus(\'' + id + '\',\'重新開啟\')">重新開啟</button>' : '') +
+    (!arrived ? '<button class="btn bad" onclick="poDelete(\'' + id + '\')">刪除</button>' : '') +
+    '<span class="sp"></span><button class="btn" onclick="closeModal()">關閉</button></div>');
+}
+async function poStatus(id, st) { try { await run('setPurchaseStatus', { id: id, status: st }); closeModal(); toast('已' + st); } catch (e) {} }
+async function poDelete(id) {
+  if (!(await ask('刪除這張請購單？', { danger: true, ok: '刪除' }))) return;
+  try { await run('deletePurchase', { id: id }); toast('已刪除'); } catch (e) {}
 }
 
 /* ---------- 材料進場／入庫 ---------- */
 PAGES.receive = function () {
   const L = UI.lastRcv;
   return (L ? '<div class="banner">✅ 已進場入庫：<b>' + esc(L.name) + '</b> ' + fmtN(L.qty) + ' ' + esc(L.unit) + '（進場日期 ' + esc(L.date) + '）' +
-      '<br>・庫存已更新　・進場紀錄已寫入紀錄表' + (L.docs ? '　・已建立自檢追蹤 ' + L.docs + ' 項應收文件' : '　・本批未列入自檢追蹤') +
+      '<br>・庫存已更新　・進場紀錄已寫入紀錄表' + (L.docs ? '　・已建立自檢追蹤 ' + L.docs + ' 項應收文件' : '　・本批未列入自檢追蹤') + (L.po ? '　・請購單狀態：' + esc(L.po) : '') +
       '<div class="row" style="margin-top:8px">' + (L.docs && can('inspect') ? '<button class="btn sm" onclick="gotoBatch(\'' + L.mid + '\',\'' + L.bid + '\')">查看自檢追蹤</button>' : '') +
       '<button class="btn sm" onclick="UI.lastRcv=null;render()">關閉</button></div></div>' : '') +
     '<div class="card"><h2>材料進場／入庫</h2><p class="muted small" style="margin-top:-6px">一次完成：庫存入庫 → 進場紀錄 → 自檢追蹤（需自檢的材料會自動建立本批的應收文件）。</p>' +
@@ -677,7 +767,11 @@ function rcvChange() {
   const m = IX.mat[$('#rcvMat').value], box = $('#rcvBody');
   if (!m) { box.innerHTML = ''; return; }
   const locs = list(m.存放位置), docs = buildDocList(m.購買流程);
+  const pos = openPOs(m.物料ID), pre = UI.rcvPO && pos.find(x => x.請購ID === UI.rcvPO) ? UI.rcvPO : (pos[0] ? pos[0].請購ID : '');
   box.innerHTML = matInfo(m) +
+    (pos.length ? '<label>對應請購單 <span class="muted small" style="font-weight:400">到貨數量會累加到這張請購單</span></label><select class="inp" id="rcvPO" onchange="rcvPOHint()">' +
+      pos.map(x => '<option value="' + x.請購ID + '"' + (x.請購ID === pre ? ' selected' : '') + '>' + esc(x.請購日期) + ' 請購 ' + fmtN(x.數量) + ' ' + esc(m.單位) + '（已到 ' + fmtN(x.已到貨數量 || 0) + '，尚欠 ' + fmtN(poRemain(x)) + '）' + (x.預計到貨日 ? '　預計 ' + esc(x.預計到貨日) : '') + '</option>').join('') +
+      '<option value="">不對應請購單</option></select><div class="small muted" id="rcvPOHint"></div>' : '') +
     '<div class="grid2"><div><label>進場日期</label><input type="date" class="inp" id="rcvDate" value="' + today() + '" max="' + today() + '"></div>' +
     '<div><label>存放位置</label>' + selNew('rcvLoc', locs.concat(allLocations()), locs[0] || '') + '</div></div>' +
     qtyBlock('rcv', m, false, true) +
@@ -686,17 +780,25 @@ function rcvChange() {
     '<label class="chk"><input type="checkbox" id="rcvTrack"' + (m.需自檢 === '是' ? ' checked' : '') + '> 列入自檢追蹤（本批建立 ' + docs.length + ' 項應收文件）</label>' +
     '<details><summary>查看本批應收文件</summary><ol class="small">' + docs.map(d => '<li>' + esc(d[0]) + ' <span class="muted">— ' + esc(d[1]) + '</span></li>').join('') + '</ol></details>' +
     '<button class="btn pri big" id="rcvBtn" onclick="doReceive()">確認進場入庫</button>';
+  if (UI.rcvQty && $('#rcv_q')) $('#rcv_q').value = UI.rcvQty;
+  UI.rcvPO = null; UI.rcvQty = null;
+  rcvPOHint();
+}
+function rcvPOHint() {
+  const h = $('#rcvPOHint'), s = $('#rcvPO'); if (!h || !s) return;
+  const m = IX.mat[$('#rcvMat').value], po = (D.purchases || []).find(x => x.請購ID === s.value);
+  h.textContent = po ? '這張請購單尚欠 ' + fmtN(poRemain(po)) + ' ' + m.單位 + '；本次到貨後，達到請購數量會自動標為「已到貨」，未達則為「部分到貨」。' : '本次進場不會更新任何請購單。';
 }
 async function doReceive() {
   const m = IX.mat[$('#rcvMat').value]; if (!m) return toast('請選擇物料', 'err');
   const q = readQty('rcv', m); if (!(q.qty > 0)) return toast('請輸入進場數量', 'err');
   const p = { materialId: m.物料ID, date: $('#rcvDate').value, location: selVal('rcvLoc'), person: selVal('rcvPerson'),
-    note: $('#rcvNote').value, track: $('#rcvTrack').checked, qty: q.qty, variants: q.variants };
+    note: $('#rcvNote').value, track: $('#rcvTrack').checked, qty: q.qty, variants: q.variants, purchaseId: $('#rcvPO') ? $('#rcvPO').value : '' };
   if (p.date > today()) return toast('進場日期不能晚於今天', 'err');
   $('#rcvBtn').disabled = true;
   try {
     const r = await run('receive', p);
-    UI.lastRcv = { name: label(m), qty: q.qty, unit: m.單位, date: p.date, mid: m.物料ID, bid: r.result.batchId, docs: r.result.docCount };
+    UI.lastRcv = { name: label(m), qty: q.qty, unit: m.單位, date: p.date, mid: m.物料ID, bid: r.result.batchId, docs: r.result.docCount, po: r.result.poStatus };
     render(); window.scrollTo(0, 0);
   } catch (e) { const b = $('#rcvBtn'); if (b) b.disabled = false; }
 }
@@ -824,7 +926,7 @@ PAGES.record = function () {
     return '<button class="' + (!q && x === c ? 'on' : '') + '" data-c="' + esc(x) + '" onclick="UI.rcC=this.dataset.c;UI.rcQ=\'\';render()">' + esc(catLabel(x)) + ' <span class="cn">' + n + '</span></button>';
   }).join('') + '</div>';
   return '<div class="card"><div class="row"><h2 style="margin:0">進場與施工紀錄表</h2><span class="sp"></span><span class="muted small">點選大類 → 點選材料展開進場與施工明細</span></div>' + recordTabs() +
-    '<div class="grid2"><input class="inp" placeholder="🔍 搜尋全部大類的材料" value="' + esc(q) + '" oninput="UI.rcQ=this.value;rerenderKeep(this)">' +
+    '<div class="grid2"><input class="inp" placeholder="🔍 搜尋全部大類的材料" value="' + esc(q) + '" id="q_rcQ" oninput="UI.rcQ=this.value;rerenderKeep(this)">' +
     '<label class="chk" style="margin:0"><input type="checkbox"' + (only ? ' checked' : '') + ' onchange="UI.rcOnly=this.checked;render()"> 只看已進場</label></div>' + btns +
     (q ? '<div class="small muted" style="margin:4px 0 8px">搜尋「' + esc(q) + '」：共 ' + ms.length + ' 項（全部大類）　<a href="#" onclick="UI.rcQ=\'\';render();return false">清除搜尋</a></div>'
        : '<h3 style="margin:6px 0 8px">' + esc(catLabel(c)) + '　<span class="muted small" style="font-weight:400">' + ms.length + ' 項</span></h3>') +
@@ -836,7 +938,7 @@ function recordArea() {
   const site = UI.raSite || '', q = (UI.raQ || '').trim().toLowerCase(), f = UI.raF || '', t2 = UI.raT || '', by = UI.raBy || 'area';
   const outs = (D.txns || []).filter(t => (t.類型 === '領出' || t.類型 === '區域分配') && (!site || t.工地 === site) &&
     (!f || t.時間.slice(0, 10) >= f) && (!t2 || t.時間.slice(0, 10) <= t2) &&
-    (!q || ((t.工地 || '') + ' ' + (t.施工地點 || '') + ' ' + label(IX.mat[t.物料ID]) + ' ' + (t.物料名稱 || '')).toLowerCase().indexOf(q) >= 0));
+    (!q || hit((t.工地 || '') + ' ' + (t.施工地點 || '') + ' ' + label(IX.mat[t.物料ID]) + ' ' + (t.物料名稱 || ''), q)));
   // 彙總：區域 → 物料
   const areas = {};
   outs.forEach(t => {
@@ -905,7 +1007,7 @@ function recordArea() {
   return '<div class="card"><div class="row"><h2 style="margin:0">進場與施工紀錄表</h2><span class="sp"></span>' +
     (can('issue') ? '<button class="btn sm" onclick="openAlloc()">＋ 補登期初區域用量</button>' : '<span class="muted small">依「領出／施工」紀錄的施工地點彙總</span>') + '</div>' + recordTabs() +
     '<div class="' + (sites.length ? 'grid3' : 'grid2') + '">' + (sites.length ? '<select class="inp" onchange="UI.raSite=this.value;render()"><option value="">全部工地</option>' + sites.map(x => '<option' + (x === site ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>' : '') +
-    '<input class="inp" placeholder="🔍 區域或材料" value="' + esc(UI.raQ || '') + '" oninput="UI.raQ=this.value;rerenderKeep(this)">' +
+    '<input class="inp" placeholder="🔍 區域或材料" value="' + esc(UI.raQ || '') + '" id="q_raQ" oninput="UI.raQ=this.value;rerenderKeep(this)">' +
     '<div class="tabs" style="margin:0">' + [['area', '依區域'], ['mat', '依材料']].map(x => '<button class="' + (by === x[0] ? 'on' : '') + '" onclick="UI.raBy=\'' + x[0] + '\';render()">' + x[1] + '</button>').join('') + '</div></div>' +
     '<div class="row" style="margin:8px 0 4px"><span class="small muted">期間</span><input type="date" class="inp" style="width:auto" value="' + esc(f) + '" onchange="UI.raF=this.value;render()"><span>～</span>' +
     '<input type="date" class="inp" style="width:auto" value="' + esc(t2) + '" onchange="UI.raT=this.value;render()"><span class="sp"></span><span class="small muted">' + keys.length + ' 個區域・' + outs.length + ' 筆領用</span></div>' +
@@ -1016,7 +1118,7 @@ function toggleSet(set, id) { set.has(id) ? set.delete(id) : set.add(id); render
 PAGES.log = function () {
   const q = (UI.lgQ || '').toLowerCase(), tp = UI.logType, f = UI.lgF || '', t2 = UI.lgT || '';
   const all = (D.txns || []).slice().reverse().filter(t => (tp === '全部' || t.類型 === tp) &&
-    (!q || (t.物料名稱 + ' ' + t.人員 + ' ' + t.工地 + ' ' + t.施工地點 + ' ' + t.備註).toLowerCase().indexOf(q) >= 0) &&
+    (!q || hit(t.物料名稱 + ' ' + t.人員 + ' ' + t.工地 + ' ' + t.施工地點 + ' ' + t.備註, q)) &&
     (!f || t.時間.slice(0, 10) >= f) && (!t2 || t.時間.slice(0, 10) <= t2));
   const rows = all.slice(0, 500).map(t => {
     const m = IX.mat[t.物料ID];
@@ -1028,7 +1130,7 @@ PAGES.log = function () {
   }).join('');
   return '<div class="card"><h2>異動紀錄</h2><div class="grid2"><div class="tabs" style="margin:0">' + ['全部', '入庫', '領出', '期初', '區域分配'].map(x =>
       '<button class="' + (x === tp ? 'on' : '') + '" onclick="UI.logType=\'' + x + '\';render()">' + x + '</button>').join('') + '</div>' +
-    '<input class="inp" placeholder="🔍 物料、人員、工地、備註" value="' + esc(UI.lgQ || '') + '" oninput="UI.lgQ=this.value;rerenderKeep(this)"></div>' +
+    '<input class="inp" placeholder="🔍 物料、人員、工地、備註" value="' + esc(UI.lgQ || '') + '" id="q_lgQ" oninput="UI.lgQ=this.value;rerenderKeep(this)"></div>' +
     '<div class="row" style="margin-top:8px"><span class="small muted">日期</span><input type="date" class="inp" style="width:auto" value="' + esc(f) + '" onchange="UI.lgF=this.value;render()"><span>～</span>' +
     '<input type="date" class="inp" style="width:auto" value="' + esc(t2) + '" onchange="UI.lgT=this.value;render()"><span class="sp"></span><span class="small muted">' + all.length + ' 筆' + (all.length > 500 ? '（顯示最新 500 筆）' : '') + '</span></div>' +
     '<div class="tbl" style="margin-top:10px"><table><thead><tr><th>時間</th><th>類型</th><th>物料</th><th class="num">數量</th><th>人員</th><th>位置／工地／施工地點</th><th>備註</th>' + (isAdmin() ? '<th></th>' : '') + '</tr></thead><tbody>' +
@@ -1052,7 +1154,7 @@ PAGES.material = function () {
   return (noCats ? '<div class="banner info">七大類尚未設定。請管理員到「系統設定 → 下拉清單 → 大類」依紀錄表填入七大類（第八大類「吊管支架」已自動建立）。</div>' : '') +
     '<div class="card"><div class="row"><h2 style="margin:0">材料管理</h2><span class="sp"></span>' +
     '<button class="btn" onclick="openImport()">批次匯入</button><button class="btn pri" onclick="openMaterialForm()">＋ 新增物料</button></div>' +
-    '<div class="grid2" style="margin-top:10px"><input class="inp" placeholder="🔍 搜尋" value="' + esc(q) + '" oninput="UI.mtQ=this.value;rerenderKeep(this)">' +
+    '<div class="grid2" style="margin-top:10px"><input class="inp" placeholder="🔍 搜尋" value="' + esc(q) + '" id="q_mtQ" oninput="UI.mtQ=this.value;rerenderKeep(this)">' +
     '<div class="row"><select class="inp" style="flex:2" onchange="UI.mtC=this.value;render()">' + catOptions(c) + '</select>' +
     '<select class="inp" style="flex:1" onchange="UI.mtT=this.value;render()">' + [['', '主材＋配料'], ['主材', '只看主材'], ['配料', '只看配料']].map(x => '<option value="' + x[0] + '"' + (x[0] === tf ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select>' +
     '<select class="inp" style="flex:1.3" onchange="UI.mtK=this.value;render()">' + [['', '合約：全部'], ['已對應', '已對應合約'], [PENDING_CONTRACT, '待合約新增（' + nPend + '）'], ['未填', '未填合約']].map(x => '<option value="' + x[0] + '"' + (x[0] === cf ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></div></div>' +
@@ -1283,9 +1385,9 @@ function foldPage(mode) {
     '<span class="small muted">' + (rv ? FLOW.join(' → ') + '（任一階段可退件）' : '大類 → 材料細項 → 進場日期 → 自檢資料') + '</span></div>' +
     '<div class="stats" style="margin-top:10px">' + stats.map(s => '<div class="stat' + (rv ? ' clickable' : '') + (rv && UI.rvFilter === s[2] ? ' on' : '') + '"' +
       (rv ? ' data-s="' + esc(s[2]) + '" onclick="UI.rvFilter=(UI.rvFilter===this.dataset.s?\'全部\':this.dataset.s);render()"' : '') + '><b>' + s[1] + '</b><span>' + s[0] + (rv ? ' 批' : '') + '</span></div>').join('') + '</div>' +
-    (rv ? '<input class="inp" placeholder="🔍 搜尋材料" value="' + esc(q) + '" oninput="UI.inQ=this.value;rerenderKeep(this)">' +
+    (rv ? '<input class="inp" placeholder="🔍 搜尋材料" value="' + esc(q) + '" id="q_inQ" oninput="UI.inQ=this.value;rerenderKeep(this)">' +
           '<div class="tabs" style="margin:10px 0 0">' + ['全部'].concat(D.stages || []).map(x => '<button class="' + (UI.rvFilter === x ? 'on' : '') + '" data-s="' + esc(x) + '" onclick="UI.rvFilter=this.dataset.s;render()">' + esc(x) + '</button>').join('') + '</div>'
-        : '<div class="grid2"><input class="inp" placeholder="🔍 搜尋材料" value="' + esc(q) + '" oninput="UI.inQ=this.value;rerenderKeep(this)">' +
+        : '<div class="grid2"><input class="inp" placeholder="🔍 搜尋材料" value="' + esc(q) + '" id="q_inQ" oninput="UI.inQ=this.value;rerenderKeep(this)">' +
           '<label class="chk" style="margin:0"><input type="checkbox"' + (UI.onlyMissing ? ' checked' : '') + ' onchange="UI.onlyMissing=this.checked;render()"> 只顯示有缺件的</label></div>') + '</div>';
 
   html += '<div class="cats">' + ['全部'].concat(cats).map(c => '<button class="' + (UI[catKey] === c ? 'on' : '') + '" data-c="' + esc(c) + '" onclick="UI.' + catKey + '=this.dataset.c;render()">' + esc(c === '全部' ? c : catLabel(c)) + badge(c) + '</button>').join('') + '</div>';
@@ -1324,7 +1426,9 @@ function stepper(b) {
   const idx = FLOW.indexOf(s === '退件' ? rejFrom : s);
   return '<div class="steps">' + FLOW.map((x, i) => {
     const cls = s === '已完成' || i < idx ? 'done' : i === idx ? (s === '退件' ? 'rej' : 'cur') : '';
-    return '<div class="step ' + cls + '"><i>' + (cls === 'done' ? '✓' : cls === 'rej' ? '✕' : i + 1) + '</i><span>' + esc(x) + '</span></div>';
+    let dt = ''; for (let j = log.length - 1; j >= 0; j--) if (log[j].階段 === x) { dt = String(log[j].時間 || '').slice(5, 10); break; }
+    return '<div class="step ' + cls + '"><i>' + (cls === 'done' ? '✓' : cls === 'rej' ? '✕' : i + 1) + '</i><span>' + esc(x) + '</span>' +
+      (dt && (cls === 'done' || cls === 'cur' || cls === 'rej') ? '<span class="small muted" style="margin-top:0">' + esc(dt.replace('-', '/')) + '</span>' : '') + '</div>';
   }).join('') + '</div>';
 }
 function batchFold(m, b, rv) {
@@ -1342,14 +1446,15 @@ function batchFold(m, b, rv) {
     const back = st === '退件' && log.length ? (log[log.length - 1].自 || '尚未檢驗') : '';
     h += stepper(b);
     if (st === '退件' && log.length && log[log.length - 1].備註) h += '<div class="banner" style="background:var(--bad-weak);border-color:#f0c4bf;color:#7f1d1d;margin:8px 0">退件原因：' + esc(log[log.length - 1].備註) + '</div>';
-    h += '<div class="row" style="margin:10px 0">' +
+    h += '<div class="row" style="margin:10px 0"><span class="small muted">執行日期</span><input type="date" class="inp" id="sd_' + b.批次ID + '" value="' + today() + '" max="' + today() + '" style="width:auto;padding:5px 8px;font-size:13.5px">' +
       (st === '退件' ? '<button class="btn pri sm" data-to="' + esc(back) + '" onclick="setStage(\'' + b.批次ID + '\',this.dataset.to)">重新送出（回到「' + esc(back) + '」）</button>'
         : st !== '已完成' ? '<button class="btn pri sm" data-to="' + esc(FLOW[i + 1]) + '" onclick="setStage(\'' + b.批次ID + '\',this.dataset.to)">' + (st === '尚未檢驗' ? '開始品管查驗 →' : '「' + esc(st) + '」完成 → ' + esc(FLOW[i + 1])) + '</button>' : '') +
       (st !== '退件' && st !== '已完成' && st !== '尚未檢驗' ? '<button class="btn bad sm" onclick="setStage(\'' + b.批次ID + '\',\'退件\')">退件</button>' : '') +
       '<span class="sp"></span><span class="small muted">直接改為</span><select class="inp" style="width:auto;padding:5px 30px 5px 8px;font-size:13.5px" onchange="if(this.value)setStage(\'' + b.批次ID + '\',this.value)"><option value="">—</option>' +
       (D.stages || []).filter(x => x !== st).map(x => '<option>' + esc(x) + '</option>').join('') + '</select></div>';
     if (log.length) h += '<details' + (UI.openLog === b.批次ID ? ' open' : '') + ' ontoggle="if(this.open)UI.openLog=\'' + b.批次ID + '\'"><summary>送審歷程（' + log.length + '）</summary><table class="small" style="margin-top:6px"><tbody>' +
-      log.slice().reverse().map(x => '<tr><td style="white-space:nowrap">' + esc(String(x.時間 || '').slice(0, 16)) + '</td><td>' + (x.自 ? esc(x.自) + ' → ' : '') + stageChip(x.階段) + '</td><td>' + esc(x.更新者 || '') + '</td><td class="muted">' + esc(x.備註 || '') + '</td></tr>').join('') +
+      log.map((x, j) => [x, j]).reverse().map(([x, j]) => '<tr><td style="white-space:nowrap"><input type="date" class="inp" style="width:auto;padding:3px 6px;font-size:13px" value="' + esc(String(x.時間 || '').slice(0, 10)) + '" max="' + today() + '" title="修改這一階段的確切執行日期" onchange="editStageDate(\'' + b.批次ID + '\',' + j + ',this.value)">' +
+        (x.日期修改 ? '<br><span class="small muted">已改日期：' + esc(x.日期修改) + '</span>' : '') + '</td><td>' + (x.自 ? esc(x.自) + ' → ' : '') + stageChip(x.階段) + '</td><td>' + esc(x.更新者 || '') + '</td><td class="muted">' + esc(x.備註 || '') + '</td></tr>').join('') +
       '</tbody></table></details>';
     h += '<details style="margin-top:8px"><summary>自檢資料（已收集 ' + got + '／' + ds.length + '）</summary><div style="margin-top:6px">' + ds.map(d => docRow(d)).join('') + '</div></details>';
   } else {
@@ -1365,7 +1470,14 @@ function batchFold(m, b, rv) {
 async function setStage(bid, to) {
   let note = '';
   if (to === '退件') { note = await ask('退件原因', { input: true, ph: '例：缺監造簽名、型錄規格不符…', ok: '確定退件' }); if (note === null) return render(); }
-  try { const r = await call('setStage', { batchId: bid, stage: to, note: note }); const i = D.batches.findIndex(x => x.批次ID === bid); if (i >= 0) D.batches[i] = r.batch; index(); render(); toast('已更新為「' + to + '」'); }
+  const dEl = $('#sd_' + bid), date = dEl ? dEl.value : '';
+  if (date > today()) { toast('執行日期不能晚於今天', 'err'); return render(); }
+  try { const r = await call('setStage', { batchId: bid, stage: to, note: note, date: date }); const i = D.batches.findIndex(x => x.批次ID === bid); if (i >= 0) D.batches[i] = r.batch; index(); render(); toast('已更新為「' + to + '」'); }
+  catch (e) { toast(e.message, 'err'); render(); }
+}
+async function editStageDate(bid, j, date) {
+  if (!date) return render();
+  try { const r = await call('editStageDate', { batchId: bid, index: j, date: date }); const i = D.batches.findIndex(x => x.批次ID === bid); if (i >= 0) D.batches[i] = r.batch; UI.openLog = bid; index(); render(); toast('已修改執行日期為 ' + date); }
   catch (e) { toast(e.message, 'err'); render(); }
 }
 function docRow(d) {
