@@ -726,7 +726,7 @@ PAGES.purchase = function () {
       '<div class="tbl" style="margin-top:8px"><table><thead><tr><th>材料</th><th class="num">請購數量</th><th class="num">已到貨</th><th class="num">在途（尚欠）</th><th>狀態</th><th></th></tr></thead><tbody>' + ls.map(line).join('') + '</tbody></table></div></div>';
   }).join('');
   return '<div class="card"><div class="row"><h2 style="margin:0">請購管理</h2><span class="sp"></span><button class="btn pri" onclick="poOrderForm()">＋ 開新請購單</button></div>' +
-    '<p class="muted small">開請購單（一張最多 15 項）後可直接匯出公司格式的 Excel 送單；單號自動編為 DA-A057-請購日期＋當天流水號。材料到貨時在「材料進場／入庫」選擇對應的請購品項，系統自動累計到貨數量，庫存總覽會同時顯示實際庫存與在途數量。</p>' +
+    '<p class="muted small">開請購單（每頁 15 項，超過自動新增第 2 頁）後可直接匯出公司格式的 Excel 送單；單號自動編為 DA-A057-請購日期＋當天流水號。材料到貨時在「材料進場／入庫」選擇對應的請購品項，系統自動累計到貨數量，庫存總覽會同時顯示實際庫存與在途數量。</p>' +
     '<div class="grid2"><input class="inp" id="q_poQ" placeholder="🔍 單號、材料、品名、備註、請購人" value="' + esc(UI.poQ || '') + '" oninput="UI.poQ=this.value;rerenderKeep(this)">' +
     '<div class="tabs" style="margin:0">' + ['未結', '已到貨', '結案', '取消', '全部'].map(x => '<button class="' + (f === x ? 'on' : '') + '" onclick="UI.poF=\'' + x + '\';render()">' + x + (x !== '全部' ? ' ' + cnt(x) : '') + '</button>').join('') + '</div></div>' +
     (cards || '<div class="empty" style="margin-top:12px">' + (f === '未結' ? '目前沒有未到貨的請購單' : '沒有符合的請購單') + '</div>') +
@@ -774,15 +774,17 @@ async function poDelete(id) {
 }
 
 /* ---------- 請購單（多品項）＋匯出指定格式 Excel ---------- */
-const PO_MAX = 15;
+const PO_MAX = 15;          // 範本一頁 15 項；超過自動新增第 2 頁
+const PO_LINES_MAX = 150;   // 一張請購單最多品項數（10 頁）
 const colorWord = v => /^[紅白黑藍黃綠灰棕橙紫咖]$/.test(v) ? v + '色' : v;
 const contractOf = m => { const v = String((m && m.合約項目) || '').trim(); return v && v !== PENDING_CONTRACT ? v : ''; };
-/** 品名規格：有合約對應名稱用合約名稱，否則用物料名稱＋規格；有分項（顏色）再接在後面 */
+/** 品名規格：物料「名稱」＋規格；有分項（顏色）再接在後面 */
 function poName(m, v) {
   if (!m) return '';
-  const base = contractOf(m) || (m.名稱 + (m.規格 ? '，' + m.規格 : ''));
-  return base + (v ? '，' + colorWord(v) : '');
+  return m.名稱 + (m.規格 ? '，' + m.規格 : '') + (v ? '，' + colorWord(v) : '');
 }
+/** 舊版自動帶入的品名（合約名稱優先），用來判斷是否為使用者手動修改過 */
+const poNameOld = (m, v) => m ? (contractOf(m) || (m.名稱 + (m.規格 ? '，' + m.規格 : ''))) + (v ? '，' + colorWord(v) : '') : '';
 /** 同一材料上一次請購的備註／單位（自動帶入，可修改） */
 function lastPO(mid, key) {
   const ps = (D.purchases || []).filter(p => p.物料ID === mid && String(p[key] || '').trim()).sort((a, b) => String(b.登錄時間).localeCompare(String(a.登錄時間)));
@@ -799,14 +801,15 @@ let POF = null;
 function poOrderForm(no) {
   const ls = no ? (D.purchases || []).filter(p => p.請購單號 === no) : [];
   POF = { no: no || '', date: ls.length ? ls[0].請購日期 : today(), need: ls.length ? ls[0].預計到貨日 : '',
-    lines: ls.length ? ls.map(p => ({ id: p.請購ID, mid: p.物料ID, v: p.分項 || '', name: p.品名規格 || poName(IX.mat[p.物料ID], p.分項), nameEd: true,
+    lines: ls.length ? ls.map(p => ({ id: p.請購ID, mid: p.物料ID, v: p.分項 || '', name: (!p.品名規格 || p.品名規格 === poNameOld(IX.mat[p.物料ID], p.分項)) ? poName(IX.mat[p.物料ID], p.分項) : p.品名規格,
+      nameEd: !!p.品名規格 && p.品名規格 !== poNameOld(IX.mat[p.物料ID], p.分項) && p.品名規格 !== poName(IX.mat[p.物料ID], p.分項),
       qty: p.請購數量 || p.數量, unit: p.請購單位 || (IX.mat[p.物料ID] || {}).單位, note: p.備註 || '', arrived: num(p.已到貨數量) })) : [{}, {}, {}] };
   openModal('<h2>' + (no ? '修改請購單 ' + esc(no) : '開新請購單') + '</h2>' +
     '<div class="grid2"><div><label>請購日期</label><input type="date" class="inp" id="pfDate" value="' + esc(POF.date) + '" max="' + today() + '"' + (no ? ' disabled' : '') + ' onchange="POF.date=this.value;poNoHint()"></div>' +
     '<div><label>需求日期</label><input type="date" class="inp" id="pfNeed" value="' + esc(POF.need) + '" onchange="POF.need=this.value"></div></div>' +
     '<div class="small muted" id="pfNo" style="margin-top:4px"></div>' +
     '<div id="pfLines" style="margin-top:10px"></div>' +
-    '<div class="row" style="margin-top:6px"><button class="btn sm" id="pfAdd" onclick="POF.lines.push({});poDraw()">＋ 新增品項</button><span class="sp"></span><span class="small muted">一張最多 ' + PO_MAX + ' 項（範本格數）</span></div>' +
+    '<div class="row" style="margin-top:6px"><button class="btn sm" id="pfAdd" onclick="POF.lines.push({});poDraw()">＋ 新增品項</button><span class="sp"></span><span class="small muted" id="pfPages"></span></div>' +
     '<div class="row end" style="margin-top:14px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="pfSave" onclick="poOrderSave(false)">儲存</button><button class="btn pri" onclick="poOrderSave(true)">儲存並匯出 Excel</button></div>', true);
   poNoHint(); poDraw();
 }
@@ -819,14 +822,15 @@ function poNoHint() {
 function poDraw() {
   $('#pfLines').innerHTML = POF.lines.map((r, i) => {
     const m = IX.mat[r.mid], vs = m ? list(m.分項) : [], us = poUnits(m), lock = r.arrived > 0;
-    return '<div class="card" style="padding:10px;margin:0 0 8px;box-shadow:none;border:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:nowrap;align-items:center">' +
+    return (i && i % PO_MAX === 0 ? '<div class="small muted" style="text-align:center;margin:4px 0 8px;border-top:1px dashed var(--line);padding-top:4px">— 以下為第 ' + (i / PO_MAX + 1) + ' 頁 —</div>' : '') +
+      '<div class="card" style="padding:10px;margin:0 0 8px;box-shadow:none;border:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:nowrap;align-items:center">' +
       '<b style="width:22px">' + (i + 1) + '.</b>' +
       '<input class="inp" style="width:130px;flex:none" placeholder="🔍 搜尋" id="pl_q_' + i + '" value="' + esc(r.q || '') + '" oninput="POF.lines[' + i + '].q=this.value;poRefilter(' + i + ')"' + (lock ? ' disabled' : '') + '>' +
       '<select class="inp" style="flex:2;min-width:0" id="pl_m_' + i + '" onchange="poPick(' + i + ',this.value)"' + (lock ? ' disabled' : '') + '><option value="">— 選擇材料 —</option>' + matOpts(r.q || '', r.mid) + '</select>' +
       (vs.length ? '<select class="inp" style="width:110px;flex:none" onchange="POF.lines[' + i + '].v=this.value;poAutoName(' + i + ');poDraw()"><option value="">不分' + esc(m.分項名稱 || '顏色') + '</option>' + vs.map(v => '<option' + (v === r.v ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select>' : '') +
       '<button class="btn sm bad" title="移除" onclick="poDel(' + i + ')"' + (lock ? ' disabled' : '') + '>×</button></div>' +
       (m ? '<div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap"><span style="width:22px"></span>' +
-        '<div style="flex:3;min-width:240px"><span class="small muted">品名規格' + (contractOf(m) ? '（合約名稱）' : '（無合約名稱，用物料名稱）') + '</span><input class="inp" value="' + esc(r.name || '') + '" oninput="POF.lines[' + i + '].name=this.value;POF.lines[' + i + '].nameEd=true"></div>' +
+        '<div style="flex:3;min-width:240px"><span class="small muted">品名規格（物料名稱＋規格，可修改）</span><input class="inp" value="' + esc(r.name || '') + '" oninput="POF.lines[' + i + '].name=this.value;POF.lines[' + i + '].nameEd=true"></div>' +
         '<div style="flex:none"><span class="small muted">數量</span><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="inp" style="width:90px" type="number" step="any" min="0" value="' + esc(r.qty || '') + '" oninput="POF.lines[' + i + '].qty=this.value;poConv(' + i + ')">' +
           (us.length > 1 ? '<select class="inp" style="width:70px" onchange="POF.lines[' + i + '].unit=this.value;poDraw()">' + us.map(u => '<option' + (u === r.unit ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</select>' : '<span class="small">' + esc(m.單位) + '</span>') + '</div>' +
           '<div class="small muted" id="pl_c_' + i + '"></div></div>' +
@@ -835,7 +839,9 @@ function poDraw() {
       '</div>';
   }).join('');
   POF.lines.forEach((r, i) => poConv(i));
-  $('#pfAdd').disabled = POF.lines.length >= PO_MAX;
+  $('#pfAdd').disabled = POF.lines.length >= PO_LINES_MAX;
+  const n = POF.lines.filter(r => r.mid).length, pg = Math.max(1, Math.ceil(n / PO_MAX));
+  $('#pfPages').textContent = '已選 ' + n + ' 項，匯出共 ' + pg + ' 頁（每頁 ' + PO_MAX + ' 項，超過自動新增下一頁）';
 }
 function poRefilter(i) {
   const r = POF.lines[i], s = $('#pl_m_' + i);
@@ -862,7 +868,7 @@ async function poOrderSave(andExport) {
   const ls = POF.lines.filter(r => r.mid);
   if (!ls.length) return toast('請至少選一個材料', 'err');
   const bad = ls.find(r => !(num(r.qty) > 0)); if (bad) return toast('「' + label(IX.mat[bad.mid]) + '」請填數量', 'err');
-  if (ls.length > PO_MAX) return toast('一張請購單最多 ' + PO_MAX + ' 項', 'err');
+  if (ls.length > PO_LINES_MAX) return toast('一張請購單最多 ' + PO_LINES_MAX + ' 項', 'err');
   try {
     const r = await call('savePO', { orderNo: POF.no, date: POF.date, need: POF.need,
       lines: ls.map(x => ({ id: x.id || '', materialId: x.mid, variant: x.v || '', name: (x.name || '').trim() || poName(IX.mat[x.mid], x.v), qty: num(x.qty), unit: x.unit || IX.mat[x.mid].單位, note: x.note || '' })) });
@@ -935,19 +941,8 @@ async function poBuildXlsx(no) {
   if (!ls.length) throw new Error('找不到請購單 ' + no);
   const bin = atob(PO_TPL), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
   const es = zipRead(b), get = n => es.find(e => e.name === n);
-  let x = await zipText(get('xl/worksheets/sheet1.xml'));
+  const tplX = await zipText(get('xl/worksheets/sheet1.xml'));
   const inC = ls.some(p => contractOf(IX.mat[p.物料ID])), outC = ls.some(p => !contractOf(IX.mat[p.物料ID]));
-  x = xSet(x, 'I4', no);
-  x = xSet(x, 'I5', xlDate(ls[0].預計到貨日));
-  x = xSet(x, 'B7', (inC ? '▓' : '□') + '合約內材料');
-  x = xSet(x, 'D7', (outC ? '▓' : '□') + '合約外材料(含合約內溢料)');
-  for (let i = 0; i < PO_MAX; i++) {
-    const p = ls[i], r = 10 + i, m = p && IX.mat[p.物料ID];
-    x = xSet(x, 'B' + r, p ? (p.品名規格 || poName(m, p.分項)) : '');
-    x = xSet(x, 'G' + r, p ? (p.請購單位 || (m ? m.單位 : '')) : '');
-    x = xSet(x, 'H' + r, p ? num(p.請購數量 || p.數量) : '');
-    x = xSet(x, 'I' + r, p ? (p.備註 || '') : '');
-  }
   // 表頭 C、I、J 欄靠左對齊：複製原儲存格樣式，只把水平對齊改成靠左
   const stEn = get('xl/styles.xml'); let st = await zipText(stEn);
   const xfsM = st.match(/<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/);
@@ -957,18 +952,71 @@ async function poBuildXlsx(no) {
     let xf = xfs[i];
     if (/<alignment[^>]*horizontal=/.test(xf)) xf = xf.replace(/horizontal="[^"]*"/, 'horizontal="left"');
     else if (/<alignment/.test(xf)) xf = xf.replace('<alignment', '<alignment horizontal="left"');
-    else xf = xf.replace(/\/>$/, '><alignment horizontal="left" vertical="center"/></xf>').replace(/>(<\/xf>)?$/, m => m);
+    else xf = xf.replace(/\/>$/, '><alignment horizontal="left" vertical="center"/></xf>');
     if (!/applyAlignment=/.test(xf)) xf = xf.replace('<xf ', '<xf applyAlignment="1" ');
     xfs.push(xf); return (made[i] = xfs.length - 1);
   };
-  ['C4', 'C5', 'C6', 'I4', 'I5', 'I6', 'I7', 'J6', 'J7'].forEach(ref => {
-    x = x.replace(new RegExp('<c r="' + ref + '"( s="(\\d+)")?'), (m0, a, n) => '<c r="' + ref + '" s="' + leftOf(Number(n || 0)) + '"');
-  });
+  // 每 15 項一頁：超過就複製範本成第 2、3…頁（每頁都有表頭、簽核欄，單號相同）
+  const pages = []; for (let i = 0; i < ls.length; i += PO_MAX) pages.push(ls.slice(i, i + PO_MAX));
+  const N = pages.length, base = '請購單 ' + no.slice(-10), names = pages.map((_, k) => N > 1 ? base + ' 第' + (k + 1) + '頁' : base);
+  const sheetXml = async (items, k) => {
+    let x = tplX;
+    x = xSet(x, 'I4', no);
+    x = xSet(x, 'I5', xlDate(ls[0].預計到貨日));
+    x = xSet(x, 'B7', (inC ? '▓' : '□') + '合約內材料');
+    x = xSet(x, 'D7', (outC ? '▓' : '□') + '合約外材料(含合約內溢料)');
+    for (let i = 0; i < PO_MAX; i++) {
+      const p = items[i], r = 10 + i, m = p && IX.mat[p.物料ID];
+      x = xSet(x, 'B' + r, p ? ((!p.品名規格 || (contractOf(m) && p.品名規格 === poNameOld(m, p.分項))) ? poName(m, p.分項) : p.品名規格) : '');
+      x = xSet(x, 'G' + r, p ? (p.請購單位 || (m ? m.單位 : '')) : '');
+      x = xSet(x, 'H' + r, p ? num(p.請購數量 || p.數量) : '');
+      x = xSet(x, 'I' + r, p ? (p.備註 || '') : '');
+    }
+    ['C4', 'C5', 'C6', 'I4', 'I5', 'I6', 'I7', 'J6', 'J7'].forEach(ref => {
+      x = x.replace(new RegExp('<c r="' + ref + '"( s="(\\d+)")?'), (m0, a, n) => '<c r="' + ref + '" s="' + leftOf(Number(n || 0)) + '"');
+    });
+    // 頁尾「總頁：第　頁 之 第　頁」填入總頁數與頁次
+    x = x.replace(/總頁:第\s*頁 之 第\s*頁/, '總頁:第  ' + N + '  頁 之 第  ' + (k + 1) + '  頁');
+    if (k > 0) x = x.replace(' tabSelected="1"', '');
+    return x;
+  };
+  await zipPut(get('xl/worksheets/sheet1.xml'), await sheetXml(pages[0], 0));
+  if (N > 1) {
+    const clone = (src, name) => { const e = get(src); const c = Object.assign({}, e, { name: name }); es.push(c); return c; };
+    const sRel = await zipText(get('xl/worksheets/_rels/sheet1.xml.rels'));
+    for (let k = 1; k < N; k++) {
+      const n = k + 1;
+      await zipPut(clone('xl/worksheets/sheet1.xml', 'xl/worksheets/sheet' + n + '.xml'), await sheetXml(pages[k], k));
+      await zipPut(clone('xl/worksheets/_rels/sheet1.xml.rels', 'xl/worksheets/_rels/sheet' + n + '.xml.rels'),
+        sRel.replace('vmlDrawing1.vml', 'vmlDrawing' + n + '.vml').replace('printerSettings1.bin', 'printerSettings' + n + '.bin'));
+      clone('xl/drawings/vmlDrawing1.vml', 'xl/drawings/vmlDrawing' + n + '.vml');
+      clone('xl/drawings/_rels/vmlDrawing1.vml.rels', 'xl/drawings/_rels/vmlDrawing' + n + '.vml.rels');
+      clone('xl/printerSettings/printerSettings1.bin', 'xl/printerSettings/printerSettings' + n + '.bin');
+    }
+  }
+  // 多頁時移除公式計算鏈（Excel 開啟時會自動重建），避免只對應第一頁
+  const ccI = es.findIndex(e => e.name === 'xl/calcChain.xml'); if (ccI >= 0) es.splice(ccI, 1);
+  const ct = get('[Content_Types].xml');
+  let ctx = (await zipText(ct)).replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*\/>/, '');
+  for (let n = 2; n <= N; n++) ctx = ctx.replace('</Types>', '<Override PartName="/xl/worksheets/sheet' + n + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>');
+  await zipPut(ct, ctx);
+  const wr = get('xl/_rels/workbook.xml.rels');
+  let wrx = (await zipText(wr)).replace(/<Relationship [^>]*Target="calcChain\.xml"\/>/, '');
+  for (let n = 2; n <= N; n++) wrx = wrx.replace('</Relationships>', '<Relationship Id="rIdS' + n + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + n + '.xml"/></Relationships>');
+  await zipPut(wr, wrx);
+  const q = s => "'" + xesc(s).replace(/'/g, "''") + "'";
+  const wb = get('xl/workbook.xml');
+  let wbx = (await zipText(wb)).replace(/<sheets>[\s\S]*?<\/sheets>/, '<sheets>' + names.map((s, k) => '<sheet name="' + xesc(s) + '" sheetId="' + (k + 1) + '" r:id="' + (k ? 'rIdS' + (k + 1) : 'rId1') + '"/>').join('') + '</sheets>')
+    .replace(/<definedNames>[\s\S]*?<\/definedNames>/, '<definedNames>' + names.map((s, k) => '<definedName name="_xlnm.Print_Area" localSheetId="' + k + '">' + q(s) + '!$A$1:$N$31</definedName>').join('') +
+      names.map((s, k) => '<definedName name="_xlnm.Print_Titles" localSheetId="' + k + '">' + q(s) + '!$1:$9</definedName>').join('') + '</definedNames>');
+  await zipPut(wb, wbx);
+  const ap = get('docProps/app.xml');
+  if (ap) await zipPut(ap, (await zipText(ap))
+    .replace(/<HeadingPairs>[\s\S]*?<\/HeadingPairs>/, '<HeadingPairs><vt:vector size="4" baseType="variant"><vt:variant><vt:lpstr>工作表</vt:lpstr></vt:variant><vt:variant><vt:i4>' + N + '</vt:i4></vt:variant><vt:variant><vt:lpstr>具名範圍</vt:lpstr></vt:variant><vt:variant><vt:i4>' + (2 * N) + '</vt:i4></vt:variant></vt:vector></HeadingPairs>')
+    .replace(/<TitlesOfParts>[\s\S]*?<\/TitlesOfParts>/, '<TitlesOfParts><vt:vector size="' + (3 * N) + '" baseType="lpstr">' + names.map(s => '<vt:lpstr>' + xesc(s) + '</vt:lpstr>').join('') +
+      names.map(s => '<vt:lpstr>' + q(s) + '!Print_Area</vt:lpstr>').join('') + names.map(s => '<vt:lpstr>' + q(s) + '!Print_Titles</vt:lpstr>').join('') + '</vt:vector></TitlesOfParts>'));
   st = st.replace(xfsM[0], '<cellXfs count="' + xfs.length + '">' + xfs.join('') + '</cellXfs>');
   await zipPut(stEn, st);
-  await zipPut(get('xl/worksheets/sheet1.xml'), x);
-  const sheetName = '請購單 ' + no.slice(-10);
-  for (const n of ['xl/workbook.xml', 'docProps/app.xml']) { const en = get(n); if (en) await zipPut(en, (await zipText(en)).split('請購單 2026110401').join(xesc(sheetName))); }
   return zipWrite(es);
 }
 async function poExport(no) {
