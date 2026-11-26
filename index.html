@@ -403,8 +403,16 @@ function leftoverOf(mid, site) {
 }
 const leftTxt = (n, uu) => n < -1e-9 ? '<span style="color:var(--bad)">不足 ' + fmtN(-n) + ' ' + esc(uu) + '</span>' : '<span style="color:var(--warn)">' + fmtN(n) + ' ' + esc(uu) + '</span>';
 function usedWeight(m, used) { return m && num(m.單位重量) ? used * num(m.單位重量) : null; }
+/** 最小包裝：1 包裝單位 = 包裝數量 個（最小）單位 */
+const packN = m => (m && m.包裝單位 && num(m.包裝數量) > 0) ? num(m.包裝數量) : 0;
+function packText(m, q) {
+  const n = packN(m); if (!n || !(Math.abs(q) > 1e-9)) return '';
+  const neg = q < 0, a = Math.abs(q), k = Math.floor(a / n + 1e-9), r = Math.round((a - k * n) * 1e6) / 1e6;
+  return (neg ? '－' : '') + (k ? fmtN(k) + ' ' + m.包裝單位 : '') + (k && r ? '＋' : '') + (r || !k ? fmtN(r) + ' ' + m.單位 : '');
+}
 function convRule(m) {
   const a = [];
+  if (packN(m)) a.push('1 ' + m.包裝單位 + ' = ' + fmtN(packN(m)) + ' ' + m.單位);
   if (num(m.換算係數) && m.換算單位) a.push('1 ' + m.單位 + ' = ' + fmtN(m.換算係數) + ' ' + m.換算單位);
   if (num(m.單位重量)) a.push('1 ' + (num(m.換算係數) && m.換算單位 ? m.換算單位 : m.單位) + ' = ' + fmtN(m.單位重量) + ' kg');
   return a.join('；');
@@ -541,12 +549,13 @@ function matInfo(m) {
 }
 function qtyBlock(px, m, withStock, allowNewVariant) {
   const vs = list(m.分項), st = stockOf(m.物料ID), wu = px === 'iss', wire = wu && isWire(m), uu = useUnit(m);
+  const pu = packN(m) ? '<select class="inp" id="' + px + '_u" style="width:auto;flex:none" onchange="qtyHint(\'' + px + '\')"><option value="">' + esc(m.單位) + '</option><option value="pk">' + esc(m.包裝單位) + '（' + fmtN(packN(m)) + ' ' + esc(m.單位) + '）</option></select>' : '';
   if (!vs.length) {
-    return '<label>' + (wu ? '扣料數量' : '數量') + '（' + esc(m.單位) + '）' + (wire ? ' <span class="muted small" style="font-weight:400">選填：只用現場餘料時可不填</span>' : '') + '</label>' +
-      '<input class="inp" type="number" step="any" min="0" id="' + px + '_q" inputmode="decimal" oninput="qtyHint(\'' + px + '\')">' +
+    return '<label>' + (wu ? '扣料數量' : '數量') + (pu ? '' : '（' + esc(m.單位) + '）') + (wire ? ' <span class="muted small" style="font-weight:400">選填：只用現場餘料時可不填</span>' : '') + '</label>' +
+      (pu ? '<div class="row" style="flex-wrap:nowrap;gap:6px">' : '') + '<input class="inp" type="number" step="any" min="0" id="' + px + '_q" inputmode="decimal" oninput="qtyHint(\'' + px + '\')">' + (pu ? pu + '</div>' : '') +
       '<div class="small muted" id="' + px + '_hint"></div>';
   }
-  return '<label>各分項數量' + (wu ? '' : '（' + esc(m.單位) + '）') + '</label><div class="tbl"><table class="vtable">' +
+  return '<label>各分項數量' + (wu || pu ? '' : '（' + esc(m.單位) + '）') + '</label>' + (pu ? '<div class="row small" style="gap:6px;margin-bottom:4px"><span>數量單位</span>' + pu + '</div>' : '') + '<div class="tbl"><table class="vtable">' +
     (wu ? '<thead><tr><th>分項</th><th>庫存</th>' + (wire ? '<th>現場餘料</th>' : '') + '<th>扣料（' + esc(m.單位) + '）' + (wire ? '<br><span style="font-weight:400">選填</span>' : '') + '</th>' +
       '<th>實際使用（' + esc(uu) + '）<br><span style="font-weight:400">選填</span></th><th>' + (wire ? '使用後餘料' : '現場餘料') + '</th></tr></thead>' : '') + '<tbody>' +
     vs.map(k => '<tr><td>' + esc(k) + '</td>' + (withStock ? '<td class="muted small">存 ' + fmtN(st.v[k] || 0) + '</td>' : '') +
@@ -557,11 +566,12 @@ function qtyBlock(px, m, withStock, allowNewVariant) {
     '</tbody></table></div><div class="small muted" id="' + px + '_hint"></div>';
 }
 function readQty(px, m) {
-  if (!list(m.分項).length) return { qty: num($('#' + px + '_q').value) };
+  const u = $('#' + px + '_u'), k = u && u.value === 'pk' ? packN(m) : 1, x = n => Math.round(n * k * 1e6) / 1e6;   // 以包裝輸入時換算成最小單位
+  if (!list(m.分項).length) return { qty: x(num($('#' + px + '_q').value)) };
   const o = {};
-  $$('.' + px + '-vq').forEach(i => { const n = num(i.value); if (n > 0) o[i.dataset.k] = n; });
+  $$('.' + px + '-vq').forEach(i => { const n = num(i.value); if (n > 0) o[i.dataset.k] = x(n); });
   const nk = $('#' + px + '_nvk'), nq = $('#' + px + '_nvq');
-  if (nk && nk.value.trim() && num(nq.value) > 0) o[nk.value.trim()] = (o[nk.value.trim()] || 0) + num(nq.value);
+  if (nk && nk.value.trim() && num(nq.value) > 0) o[nk.value.trim()] = (o[nk.value.trim()] || 0) + x(num(nq.value));
   return { qty: sumObj(o), variants: o };
 }
 /** 讀取實際使用量：有分項時逐項讀取 */
@@ -631,7 +641,7 @@ function qtyHint(px) {
   if (px === 'iss' && document.activeElement && document.activeElement.id === 'iss_q') document.activeElement.dataset.auto = '';
   const sel = px === 'rcv' ? '#rcvMat' : '#issMat'; const m = IX.mat[$(sel).value]; if (!m) return;
   const q = readQty(px, m).qty; const h = $('#' + px + '_hint');
-  if (h) h.textContent = q ? ('合計 ' + fmtN(q) + ' ' + m.單位 + ' ' + convText(m, q)) : '';
+  if (h) h.textContent = q ? ('合計 ' + fmtN(q) + ' ' + m.單位 + (packN(m) ? '（' + packText(m, q) + '）' : '') + ' ' + convText(m, q)) : '';
   if (px === 'iss') issUseHint();
 }
 
@@ -653,6 +663,7 @@ PAGES.stock = function () {
     return '<tr class="it"><td>' + thumbHtml(m) + '</td><td><b>' + esc(m.名稱) + '</b>' + (m.規格 ? '<br><span class="muted small">' + esc(m.規格) + '</span>' : '') + aliasHtml(m) + (m.合約項目 ? '<br>' + contractChip(m) : '') +
       '</td><td class="small' + (list(m.存放位置).length ? '' : ' nil') + '" data-l="位置">' + list(m.存放位置).map(l => '<span class="chip">' + esc(l) + '</span>').join('') +
       '</td><td class="num" data-l="實際庫存"><b style="font-size:16px;' + (st.total <= 0 ? 'color:var(--bad)' : '') + '">' + fmtN(st.total) + '</b> ' + esc(m.單位) +
+      (packN(m) && st.total > 0 ? '<br><span class="muted small">＝ ' + esc(packText(m, st.total)) + '（1 ' + esc(m.包裝單位) + ' = ' + fmtN(packN(m)) + ' ' + esc(m.單位) + '）</span>' : '') +
       (vs.length ? '<br>' + vs.map(k => '<span class="chip pri">' + esc(k) + ' ' + fmtN(st.v[k]) + '</span>').join('') : '') +
       (isWire(m) ? (lo => Math.abs(lo.total) > 1e-9 ? '<br><span class="small" style="color:var(--warn)">現場餘料 ' + fmtN(lo.total) + ' ' + esc(useUnit(m)) + '</span>' +
         (Object.keys(lo.v).filter(k => Math.abs(lo.v[k]) > 1e-9).length ? '<br>' + Object.keys(lo.v).filter(k => Math.abs(lo.v[k]) > 1e-9).map(k => '<span class="chip warn">' + esc(k) + ' ' + fmtN(lo.v[k]) + esc(useUnit(m)) + '</span>').join('') : '') : '')(leftoverOf(m.物料ID)) : '') +
@@ -773,7 +784,8 @@ function lastPO(mid, key) {
   const ps = (D.purchases || []).filter(p => p.物料ID === mid && String(p[key] || '').trim()).sort((a, b) => String(b.登錄時間).localeCompare(String(a.登錄時間)));
   return ps.length ? ps[0][key] : '';
 }
-const poUnits = m => m ? uniq([m.單位].concat(useFactor(m) !== 1 ? [useUnit(m)] : [])) : [];
+const poUnits = m => m ? uniq([m.單位].concat(packN(m) ? [m.包裝單位] : [], useFactor(m) !== 1 ? [useUnit(m)] : [])) : [];
+const poBase = (m, q, u) => !m || !u || u === m.單位 ? num(q) : (packN(m) && u === m.包裝單位) ? num(q) * packN(m) : u === useUnit(m) ? num(q) / useFactor(m) : num(q);
 const poOrders = () => {
   const g = {};
   (D.purchases || []).forEach(p => { const k = p.請購單號 || ('#' + p.請購ID); (g[k] = g[k] || []).push(p); });
@@ -839,7 +851,7 @@ function poPick(i, mid, keepFocus) {
 function poAutoName(i) { const r = POF.lines[i]; if (!r.nameEd) r.name = poName(IX.mat[r.mid], r.v); }
 function poConv(i) {
   const r = POF.lines[i], m = IX.mat[r.mid], el = $('#pl_c_' + i); if (!el || !m) return;
-  el.textContent = (r.unit && r.unit !== m.單位 && num(r.qty) > 0) ? '＝ ' + fmtN(num(r.qty) / useFactor(m)) + ' ' + m.單位 + '（在途以此計）' : '';
+  el.textContent = (r.unit && r.unit !== m.單位 && num(r.qty) > 0) ? '＝ ' + fmtN(poBase(m, r.qty, r.unit)) + ' ' + m.單位 + '（在途以此計）' : '';
 }
 function poDel(i) { POF.lines.splice(i, 1); if (!POF.lines.length) POF.lines.push({}); poDraw(); }
 async function poOrderSave(andExport) {
@@ -1432,6 +1444,8 @@ function openMaterialForm(id) {
     '<label>所屬大類</label><select class="inp" id="mfCat"></select><div class="small muted" id="mfCatHint"></div>' +
     '<label>單位換算（選填）</label><div class="row"><span>1 單位 ＝</span><input class="inp" style="width:110px" type="number" step="any" id="mfCf" value="' + v('換算係數') + '">' +
     '<input class="inp" style="width:110px" id="mfCu" placeholder="如 m" value="' + v('換算單位') + '"><span class="small muted">例：1 捆 = 100 m、1 支 = 3 m</span></div>' +
+    '<label>最小包裝（選填）</label><div class="row"><span>1</span><input class="inp" style="width:110px" id="mfPu" placeholder="如 包、盒" value="' + v('包裝單位') + '"><span>＝</span>' +
+    '<input class="inp" style="width:110px" type="number" step="any" min="0" id="mfPn" value="' + v('包裝數量') + '"><span id="mfPl">' + esc(m ? m.單位 : '單位') + '</span><span class="small muted">例：1 包 = 50 pcs。入庫、領出、請購可直接用包數輸入，庫存會顯示幾包又幾個</span></div>' +
     '<label>單位重量（選填，用來算總重量）</label><div class="row"><span id="mfWl">1 單位 ＝</span><input class="inp" style="width:110px" type="number" step="any" id="mfW" value="' + v('單位重量') + '"><span>kg</span>' +
     '<span class="small muted">例：牙條 1 m = 0.43 kg；有設單位換算時，以換算單位計</span></div>' +
     '<label class="chk"><input type="checkbox" id="mfWire"' + (m && m.線束類 === '是' ? ' checked' : '') + '> 線束類（絞線、電纜等）：施工時扣料選填，可使用現場餘料湊長度</label>' +
@@ -1460,6 +1474,7 @@ function openMaterialForm(id) {
 function mfWLabel() {
   const cu = $('#mfCu').value.trim(), cf = num($('#mfCf').value), u = selVal('mfUnit') || '單位';
   $('#mfWl').textContent = '1 ' + (cf && cu ? cu : u) + ' ＝';
+  if ($('#mfPl')) $('#mfPl').textContent = u;
 }
 function mfType() { const r = document.querySelector('input[name=mfType]:checked'); return r ? r.value : '主材'; }
 function mfTypeCh() {
@@ -1520,7 +1535,7 @@ function mfPayload() {
   if ($('#mfVarIn').value.trim()) mfAdd('vars', 'mfVarIn');
   if ($('#mfAliasIn').value.trim()) mfAdd('alias', 'mfAliasIn');
   return { 物料ID: MF.id, 名稱: $('#mfName').value, 規格: $('#mfSpec').value, 單位: selVal('mfUnit'), 類型: mfType(), 大項目: $('#mfCat').value,
-    換算係數: $('#mfCf').value, 換算單位: $('#mfCu').value, 單位重量: $('#mfW').value, 線束類: $('#mfWire').checked, 存放位置: MF.locs, 分項: MF.vars, 別名: MF.alias, 照片: MF.photos.slice(),
+    換算係數: $('#mfCf').value, 換算單位: $('#mfCu').value, 包裝單位: $('#mfPu').value.trim(), 包裝數量: $('#mfPn').value, 單位重量: $('#mfW').value, 線束類: $('#mfWire').checked, 存放位置: MF.locs, 分項: MF.vars, 別名: MF.alias, 照片: MF.photos.slice(),
     初始數量: MF.vars.length ? 0 : num(MF.init['']), 初始分項: MF.vars.length ? MF.vars.reduce((o, k) => { if (num(MF.init[k]) > 0) o[k] = num(MF.init[k]); return o; }, {}) : null,
     需自檢: $('#mfInsp').checked, 供應商: $('#mfSup').value, 購買流程: $('#mfFlow').value, 合約項目: $('#mfCt').value.trim(), 備註: $('#mfNote').value };
 }
@@ -1551,9 +1566,9 @@ async function mfDelete() {
 /* 批次匯入 */
 const IMPORT_KEYS = { '照片': '照片', '圖片': '照片', '相片': '照片', '品名規格': '名稱', '物料名稱': '名稱', '別名': '別名', '俗稱': '別名', '合約名稱': '合約項目', '合約項目': '合約項目', '合約': '合約項目', '大項目': '大項目', '項目': '大項目', '大類': '大項目', '類型': '類型', '分類': '類型', '名稱': '名稱', '材料名稱': '名稱', '品名': '名稱', '材料': '名稱', '規格': '規格', '型號': '規格', '單位': '單位',
   '期初庫存': '期初庫存', '庫存': '期初庫存', '數量': '期初庫存', '存放位置': '存放位置', '位置': '存放位置', '供應商': '供應商', '購買流程': '購買流程', '流程': '購買流程',
-  '需自檢': '需自檢', '換算單位': '換算單位', '換算係數': '換算係數', '單位重量': '單位重量', '重量': '單位重量', '線束類': '線束類', '分項': '分項', '顏色': '分項', '備註': '備註' };
+  '需自檢': '需自檢', '換算單位': '換算單位', '換算係數': '換算係數', '包裝單位': '包裝單位', '包裝數量': '包裝數量', '單位重量': '單位重量', '重量': '單位重量', '線束類': '線束類', '分項': '分項', '顏色': '分項', '備註': '備註' };
 function openImport() {
-  openModal('<h2>批次匯入物料</h2><p class="muted small">從 Excel／Google 試算表複製（含第一列標題）貼上。可辨識欄位：大類（或大項目）、類型（主材／配料）、名稱、別名（多個用、分隔）、規格、合約名稱、照片（雲端硬碟連結）、單位、換算單位、換算係數、單位重量（kg）、期初庫存、存放位置、供應商、購買流程、需自檢、換算單位、換算係數、分項、備註。<br>已存在（名稱＋規格相同）者只補空白欄位；同名稱不同規格者共用購買流程；沒有大類的材料歸入「共用配料」。</p>' +
+  openModal('<h2>批次匯入物料</h2><p class="muted small">從 Excel／Google 試算表複製（含第一列標題）貼上。可辨識欄位：大類（或大項目）、類型（主材／配料）、名稱、別名（多個用、分隔）、規格、合約名稱、照片（雲端硬碟連結）、單位、換算單位、換算係數、包裝單位、包裝數量（如 包／50）、單位重量（kg）、期初庫存、存放位置、供應商、購買流程、需自檢、換算單位、換算係數、分項、備註。<br>已存在（名稱＋規格相同）者只補空白欄位；同名稱不同規格者共用購買流程；沒有大類的材料歸入「共用配料」。</p>' +
     '<textarea class="inp" id="impT" style="min-height:180px" oninput="impPrev()" placeholder="大項目	名稱	規格	單位	購買流程"></textarea><div id="impP" class="small muted" style="margin-top:6px"></div>' +
     '<label class="chk"><input type="checkbox" id="impI" checked> 匯入的材料全部設為「需自檢」</label>' +
     '<div class="row end" style="margin-top:14px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" onclick="doImport()">匯入</button></div>');
