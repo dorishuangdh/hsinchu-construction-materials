@@ -155,6 +155,9 @@ tr.sub td{background:#fbfcfd}
 @keyframes ld{from{background-position:-50% 0}to{background-position:150% 0}}
 .empty{text-align:center;color:var(--muted);padding:30px 10px}
 .lockcard{max-width:420px;margin:40px auto;text-align:center}
+.locs{display:flex;flex-direction:column;gap:3px;min-width:150px}
+.loc{display:flex;gap:6px;align-items:baseline;white-space:nowrap}.loc span:first-child{color:var(--muted,#667085);min-width:84px}
+.loc b{font-size:14px}.loc.neg b{color:var(--bad)}.loc.zero{opacity:.55}
 </style>
 </head>
 <body>
@@ -297,7 +300,7 @@ function index() {
   (D.materials || []).forEach(m => IX.mat[m.物料ID] = m);
   (D.txns || []).forEach(t => {
     (IX.tBy[t.物料ID] = IX.tBy[t.物料ID] || []).push(t);
-    if (t.類型 === '區域分配') return;   // 期初區域用量補登：不影響庫存
+    if (t.類型 === '區域分配' || t.類型 === '移倉') return;   // 期初區域用量補登、移倉：不影響總庫存
     const s = IX.stock[t.物料ID] || (IX.stock[t.物料ID] = { total: 0, v: {}, inQ: 0, outQ: 0 });
     const q = num(t.數量), sg = t.類型 === '領出' ? -1 : 1;
     s.total += sg * q; if (sg > 0) s.inQ += q; else s.outQ += q;
@@ -639,7 +642,7 @@ function issUseHint() {
 }
 function qtyHint(px) {
   if (px === 'iss' && document.activeElement && document.activeElement.id === 'iss_q') document.activeElement.dataset.auto = '';
-  const sel = px === 'rcv' ? '#rcvMat' : '#issMat'; const m = IX.mat[$(sel).value]; if (!m) return;
+  const sel = px === 'rcv' ? '#rcvMat' : px === 'trf' ? '#trfMat' : '#issMat'; const m = IX.mat[$(sel).value]; if (!m) return;
   const q = readQty(px, m).qty; const h = $('#' + px + '_hint');
   if (h) h.textContent = q ? ('合計 ' + fmtN(q) + ' ' + m.單位 + (packN(m) ? '（' + packText(m, q) + '）' : '') + ' ' + convText(m, q)) : '';
   if (px === 'iss') issUseHint();
@@ -661,7 +664,8 @@ PAGES.stock = function () {
     const st = stockOf(m.物料ID), cq = convQty(m, st.total), tr = transitOf(m.物料ID);
     const vs = Object.keys(st.v).filter(k => Math.abs(st.v[k]) > 1e-9);
     return '<tr class="it"><td>' + thumbHtml(m) + '</td><td><b>' + esc(m.名稱) + '</b>' + (m.規格 ? '<br><span class="muted small">' + esc(m.規格) + '</span>' : '') + aliasHtml(m) + (m.合約項目 ? '<br>' + contractChip(m) : '') +
-      '</td><td class="small' + (list(m.存放位置).length ? '' : ' nil') + '" data-l="位置">' + list(m.存放位置).map(l => '<span class="chip">' + esc(l) + '</span>').join('') +
+      '</td><td class="small' + (locBreakHtml(m) ? '' : ' nil') + '" data-l="位置／數量">' + locBreakHtml(m) +
+      (can('receive') && st.total > 1e-9 ? '<button class="btn sm" style="margin-top:4px" onclick="openTransfer(\'' + m.物料ID + '\')">⇄ 移倉</button>' : '') +
       '</td><td class="num" data-l="實際庫存"><b style="font-size:16px;' + (st.total <= 0 ? 'color:var(--bad)' : '') + '">' + fmtN(st.total) + '</b> ' + esc(m.單位) +
       (packN(m) && st.total > 0 ? '<br><span class="muted small">＝ ' + esc(packText(m, st.total)) + '（1 ' + esc(m.包裝單位) + ' = ' + fmtN(packN(m)) + ' ' + esc(m.單位) + '）</span>' : '') +
       (vs.length ? '<br>' + vs.map(k => '<span class="chip pri">' + esc(k) + ' ' + fmtN(st.v[k]) + '</span>').join('') : '') +
@@ -677,7 +681,7 @@ PAGES.stock = function () {
     '<input class="inp" style="margin-top:10px" placeholder="🔍 搜尋全部大類的材料（名稱、別名、規格、合約）" value="' + esc(q) + '" id="q_stQ" oninput="UI.stQ=this.value;rerenderKeep(this)">' + btns +
     (q ? '<div class="small muted" style="margin:4px 0 8px">搜尋「' + esc(q) + '」：共 ' + ms.length + ' 項（全部大類）　<a href="#" onclick="UI.stQ=\'\';render();return false">清除搜尋</a></div>'
        : '<h3 style="margin:6px 0 8px">' + esc(catLabel(c)) + '　<span class="muted small" style="font-weight:400">' + ms.length + ' 項</span></h3>') +
-    '<div class="tbl"><table class="stk"><thead><tr><th></th><th>名稱／規格</th><th>存放位置</th><th class="num">實際庫存</th><th class="num">在途</th><th class="num">總數量（換算）</th></tr></thead><tbody>' +
+    '<div class="tbl"><table class="stk"><thead><tr><th></th><th>名稱／規格</th><th>存放位置／數量</th><th class="num">實際庫存</th><th class="num">在途</th><th class="num">總數量（換算）</th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="6" class="empty">' + (q ? '找不到符合的材料' : '尚無物料') + '</td></tr>') + '</tbody></table></div></div>';
 };
 /** 搜尋框輸入時重新整理畫面：中文輸入法組字中不更新，停止輸入 0.3 秒後才更新，並把游標放回原位 */
@@ -1050,10 +1054,65 @@ function locStockOf(mid) {
   const r = {};
   (IX.tBy[mid] || []).forEach(t => {
     if (t.類型 === '區域分配') return;
-    const k = String(t.存放位置 || '').trim(), sg = t.類型 === '領出' ? -1 : 1;
-    r[k] = (r[k] || 0) + sg * num(t.數量);
+    const k = String(t.存放位置 || '').trim(), q = num(t.數量);
+    if (t.類型 === '移倉') { r[k] = (r[k] || 0) - q; const d = String(t.目的位置 || '').trim(); r[d] = (r[d] || 0) + q; return; }
+    r[k] = (r[k] || 0) + (t.類型 === '領出' ? -q : q);
   });
   return r;
+}
+/** 庫存總覽：各存放位置的庫存數量（舊資料沒記位置、物料只設一個位置時，算在那個位置） */
+function locBreakHtml(m) {
+  const ls = locStockOf(m.物料ID), cfg = list(m.存放位置), u = esc(m.單位);
+  if (ls[''] && cfg.length === 1 && Object.keys(ls).length === 1) { ls[cfg[0]] = ls['']; delete ls['']; }   // 只有舊資料（沒記位置）且物料只設一個位置
+  const ks = Object.keys(ls).filter(k => Math.abs(ls[k]) > 1e-9).sort((a, b) => ls[b] - ls[a]);
+  const empty = cfg.filter(l => ks.indexOf(l) < 0);
+  if (!ks.length && !empty.length) return '';
+  return '<div class="locs">' + ks.map(k => '<div class="loc' + (ls[k] < 0 ? ' neg' : '') + '"><span>📍 ' + esc(k || '未指定位置') + '</span><b>' + fmtN(ls[k]) + '</b> ' + u +
+      (packN(m) && ls[k] > 0 && ls[k] >= packN(m) ? '<span class="muted">（' + esc(packText(m, ls[k])) + '）</span>' : '') + '</div>').join('') +
+    empty.map(l => '<div class="loc zero"><span>📍 ' + esc(l) + '</span><b>0</b> ' + u + '</div>').join('') + '</div>';
+}
+/** 移倉：選原位置（列出各位置庫存）→ 目的位置 → 數量 */
+function openTransfer(mid) {
+  const m = IX.mat[mid], ls = locStockOf(mid), u = esc(m.單位);
+  const froms = Object.keys(ls).filter(k => ls[k] > 1e-9).sort((a, b) => ls[b] - ls[a]);
+  if (!froms.length) return toast('這個材料目前沒有可移的庫存', 'err');
+  const nm = k => k || '未指定位置（舊資料）';
+  const dests = uniq(list(m.存放位置).concat(allLocations()));
+  openModal('<h2>⇄ 移倉：' + esc(label(m)) + '</h2><p class="muted small">把庫存從一個位置搬到另一個位置，總庫存不變。舊資料沒記位置的庫存在「未指定位置」，可用這裡歸到實際位置。</p>' +
+    '<input type="hidden" id="trfMat" value="' + esc(mid) + '">' +
+    '<div class="grid2"><div><label>從（原位置）</label><select class="inp" id="trfFrom" onchange="trfHint()">' + froms.map(k => '<option value="' + esc(k) + '">' + esc(nm(k)) + '　〔存 ' + fmtN(ls[k]) + ' ' + u + '〕</option>').join('') + '</select></div>' +
+    '<div><label>移到（目的位置）</label><input class="inp" id="trfTo" list="trfDl" placeholder="選擇或輸入新位置"><datalist id="trfDl">' + dests.map(l => '<option value="' + esc(l) + '">').join('') + '</datalist></div></div>' +
+    qtyBlock('trf', m, false, false) +
+    '<div class="row" style="gap:6px;margin-top:4px"><button class="btn sm" type="button" onclick="trfAll()">全部移過去</button><span class="small muted" id="trfInfo"></span></div>' +
+    '<div class="grid2"><div><label>日期</label><input type="date" class="inp" id="trfDate" value="' + today() + '" max="' + today() + '"></div><div><label>經手人員</label>' + personField('trfP') + '</div></div>' +
+    '<label>備註</label><input class="inp" id="trfNote" placeholder="例：舊庫存盤點歸位">' +
+    '<div class="row end" style="margin-top:14px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="trfBtn" onclick="doTransfer()">確認移倉</button></div>');
+  trfHint();
+}
+function trfHint() {
+  const m = IX.mat[$('#trfMat').value], k = $('#trfFrom').value, n = locStockOf(m.物料ID)[k] || 0;
+  $('#trfInfo').textContent = '「' + (k || '未指定位置') + '」目前有 ' + fmtN(n) + ' ' + m.單位 + (packN(m) && n >= packN(m) ? '（' + packText(m, n) + '）' : '');
+}
+function trfAll() {
+  const m = IX.mat[$('#trfMat').value], n = locStockOf(m.物料ID)[$('#trfFrom').value] || 0;
+  if (list(m.分項).length) return toast('有分項的材料請逐項填數量', 'err');
+  if ($('#trf_u')) $('#trf_u').value = '';
+  $('#trf_q').value = n; qtyHint('trf');
+}
+async function doTransfer() {
+  const m = IX.mat[$('#trfMat').value], q = readQty('trf', m), from = $('#trfFrom').value, to = $('#trfTo').value.trim();
+  if (!(q.qty > 0)) return toast('請輸入移倉數量', 'err');
+  if (!to) return toast('請選擇或輸入目的位置', 'err');
+  if (to === from) return toast('原位置與目的位置相同', 'err');
+  const have = locStockOf(m.物料ID)[from] || 0;
+  if (q.qty > have + 1e-9) return toast('「' + (from || '未指定位置') + '」只有 ' + fmtN(have) + ' ' + m.單位, 'err');
+  if (!D.me && !selVal('trfP')) return toast('請選擇經手人員', 'err');
+  try {
+    $('#trfBtn').disabled = true;
+    const r = await call('transfer', { materialId: m.物料ID, qty: q.qty, variants: q.variants, from: from, to: to, date: $('#trfDate').value, note: $('#trfNote').value, person: selVal('trfP') });
+    if (r && r.__boot) setData(r.__boot);
+    closeModal(); toast('已移倉 ' + fmtN(q.qty) + ' ' + m.單位 + '：' + (from || '未指定位置') + ' → ' + to); render();
+  } catch (e) { toast(e.message, 'err'); if ($('#trfBtn')) $('#trfBtn').disabled = false; }
 }
 /** 取料位置：自動帶入目前有庫存的位置；多個位置用下拉選單（標示各位置庫存）；沒有位置資料時才手動輸入 */
 function pickLocField(m) {
@@ -1378,13 +1437,13 @@ PAGES.log = function () {
     (!f || t.時間.slice(0, 10) >= f) && (!t2 || t.時間.slice(0, 10) <= t2));
   const rows = all.slice(0, 500).map(t => {
     const m = IX.mat[t.物料ID];
-    return '<tr><td class="small">' + esc(t.時間.slice(0, 16)) + '</td><td><span class="chip ' + (t.類型 === '領出' ? 'warn' : t.類型 === '區域分配' ? 'pri' : 'ok') + '">' + esc(t.類型 === '區域分配' ? '期初區域用量' : t.類型) + '</span></td><td>' + esc(m ? label(m) : t.物料名稱) +
-      '</td><td class="num">' + (t.類型 === '區域分配' ? fmtN(t.數量) + ' ' + esc(m ? m.單位 : '') + '<br><span class="small muted">不影響庫存</span>' : t.類型 === '領出' && !(num(t.數量) > 0) ? '<span class="muted">未扣料</span>' : (t.類型 === '領出' ? '−' : '+') + fmtN(t.數量) + ' ' + esc(m ? m.單位 : '')) + (t.分項明細 ? '<br><span class="small muted">' + esc(vText(pj(t.分項明細))) + '</span>' : '') +
+    return '<tr><td class="small">' + esc(t.時間.slice(0, 16)) + '</td><td><span class="chip ' + (t.類型 === '領出' ? 'warn' : t.類型 === '區域分配' || t.類型 === '移倉' ? 'pri' : 'ok') + '">' + esc(t.類型 === '區域分配' ? '期初區域用量' : t.類型) + '</span></td><td>' + esc(m ? label(m) : t.物料名稱) +
+      '</td><td class="num">' + (t.類型 === '移倉' ? '⇄ ' + fmtN(t.數量) + ' ' + esc(m ? m.單位 : '') + '<br><span class="small muted">不影響總庫存</span>' : t.類型 === '區域分配' ? fmtN(t.數量) + ' ' + esc(m ? m.單位 : '') + '<br><span class="small muted">不影響庫存</span>' : t.類型 === '領出' && !(num(t.數量) > 0) ? '<span class="muted">未扣料</span>' : (t.類型 === '領出' ? '−' : '+') + fmtN(t.數量) + ' ' + esc(m ? m.單位 : '')) + (t.分項明細 ? '<br><span class="small muted">' + esc(vText(pj(t.分項明細))) + '</span>' : '') +
       (num(t.實際用量) > 0 ? '<br><span class="small muted">實際使用 ' + fmtN(t.實際用量) + ' ' + esc(useUnit(m)) + (pj(t.實際用量明細) ? '（' + esc(vText(pj(t.實際用量明細))) + '）' : '') + '</span>' : '') +
-      '</td><td class="small">' + esc(t.人員) + '</td><td class="small">' + esc([t.存放位置, t.工地, t.施工地點].filter(Boolean).join('／')) + '</td><td class="small muted">' + esc(t.備註) + '</td>' +
+      '</td><td class="small">' + esc(t.人員) + '</td><td class="small">' + (t.類型 === '移倉' ? esc(t.存放位置 || '未指定位置') + ' → <b>' + esc(t.目的位置) + '</b>' : esc([t.存放位置, t.工地, t.施工地點].filter(Boolean).join('／'))) + '</td><td class="small muted">' + esc(t.備註) + '</td>' +
       (isAdmin() ? '<td><button class="btn sm bad" onclick="delTxn(\'' + t.異動ID + '\')">刪除</button></td>' : '') + '</tr>';
   }).join('');
-  return '<div class="card"><h2>異動紀錄</h2><div class="grid2"><div class="tabs" style="margin:0">' + ['全部', '入庫', '領出', '期初', '區域分配'].map(x =>
+  return '<div class="card"><h2>異動紀錄</h2><div class="grid2"><div class="tabs" style="margin:0">' + ['全部', '入庫', '領出', '移倉', '期初', '區域分配'].map(x =>
       '<button class="' + (x === tp ? 'on' : '') + '" onclick="UI.logType=\'' + x + '\';render()">' + x + '</button>').join('') + '</div>' +
     '<input class="inp" placeholder="🔍 物料、人員、工地、備註" value="' + esc(UI.lgQ || '') + '" id="q_lgQ" oninput="UI.lgQ=this.value;rerenderKeep(this)"></div>' +
     '<div class="row" style="margin-top:8px"><span class="small muted">日期</span><input type="date" class="inp" style="width:auto" value="' + esc(f) + '" onchange="UI.lgF=this.value;render()"><span>～</span>' +
