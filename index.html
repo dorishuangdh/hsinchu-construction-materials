@@ -431,7 +431,7 @@ function render() {
   $('#userbox').innerHTML = D.me
     ? '<span>👤 ' + esc(D.me.顯示名稱) + (isAdmin() ? '（管理員）' : '') + '</span><button onclick="openChangePw()">改密碼</button><button onclick="logout()">登出</button>'
     : '<span style="opacity:.8">未登入</span><button onclick="openLogin()">登入</button>';
-  $('#nav').innerHTML = D.pages.map(p => '<button class="' + (p.id === PAGE ? 'on' : '') + '" onclick="go(\'' + p.id + '\')">' + esc(p.name) +
+  $('#nav').innerHTML = D.pages.filter(p => p.allowed || !D.me).map(p => '<button class="' + (p.id === PAGE ? 'on' : '') + '" onclick="go(\'' + p.id + '\')">' + esc(p.name) +
     (!p.allowed ? '<span class="lk">🔒</span>' : '') + '</button>').join('');
   const pg = D.pages.find(p => p.id === PAGE) || D.pages[0];
   PAGE = pg.id;
@@ -689,26 +689,33 @@ document.addEventListener('compositionend', e => { e.target.__ime = false; e.tar
 /* ---------- 請購管理 ---------- */
 PAGES.purchase = function () {
   const f = UI.poF || '未結', q = (UI.poQ || '').trim().toLowerCase();
-  const all = (D.purchases || []).slice().sort((a, b) => (b.請購日期 + b.登錄時間).localeCompare(a.請購日期 + a.登錄時間));
-  const ok = p => (f === '全部' || (f === '未結' ? PO_OPEN(p) : p.狀態 === f)) && (!q || hit(p.物料名稱 + ' ' + (p.備註 || '') + ' ' + (p.請購人 || ''), q));
-  const ls = all.filter(ok), cnt = s => all.filter(p => s === '未結' ? PO_OPEN(p) : p.狀態 === s).length;
+  const ok = p => (f === '全部' || (f === '未結' ? PO_OPEN(p) : p.狀態 === f)) && (!q || hit((p.請購單號 || '') + ' ' + p.物料名稱 + ' ' + (p.品名規格 || '') + ' ' + (p.備註 || '') + ' ' + (p.請購人 || ''), q));
+  const all = D.purchases || [], cnt = s => all.filter(p => s === '未結' ? PO_OPEN(p) : p.狀態 === s).length;
   const late = p => PO_OPEN(p) && p.預計到貨日 && p.預計到貨日 < today();
-  const rows = ls.map(p => {
-    const m = IX.mat[p.物料ID], u = esc(m ? m.單位 : '');
-    return '<tr><td class="small">' + esc(p.請購日期) + '<br><span class="muted">' + esc(p.請購人 || '') + '</span></td><td><b>' + esc(m ? label(m) : p.物料名稱) + '</b>' + (p.備註 ? '<br><span class="small muted">' + esc(p.備註) + '</span>' : '') + '</td>' +
-      '<td class="num">' + fmtN(p.數量) + ' ' + u + '</td><td class="num">' + fmtN(p.已到貨數量 || 0) + ' ' + u + '</td><td class="num">' + (PO_OPEN(p) ? '<b style="color:var(--warn)">' + fmtN(poRemain(p)) + '</b> ' + u : '—') + '</td>' +
-      '<td class="small">' + (p.預計到貨日 ? esc(p.預計到貨日) + (late(p) ? '<br><span class="chip bad">已逾期</span>' : '') : '—') + '</td>' +
+  const G = poOrders(), keys = Object.keys(G).filter(k => G[k].some(ok))
+    .sort((a, b) => { const x = G[a][0], y = G[b][0]; return (y.請購日期 + (y.請購單號 || '') + y.登錄時間).localeCompare(x.請購日期 + (x.請購單號 || '') + x.登錄時間); });
+  const line = p => {
+    const m = IX.mat[p.物料ID], u = esc(m ? m.單位 : ''), pu = p.請購單位 && m && p.請購單位 !== m.單位;
+    return '<tr' + (ok(p) ? '' : ' style="opacity:.45"') + '><td><b>' + esc(m ? label(m) : p.物料名稱) + '</b>' + (p.分項 ? ' <span class="chip">' + esc(p.分項) + '</span>' : '') +
+      (p.品名規格 ? '<br><span class="small muted">品名：' + esc(p.品名規格) + '</span>' : '') + (p.備註 ? '<br><span class="small muted">備註：' + esc(p.備註) + '</span>' : '') + '</td>' +
+      '<td class="num">' + (pu ? fmtN(p.請購數量) + ' ' + esc(p.請購單位) + '<br><span class="small muted">＝' + fmtN(p.數量) + ' ' + u + '</span>' : fmtN(p.數量) + ' ' + u) + '</td><td class="num">' + fmtN(p.已到貨數量 || 0) + ' ' + u + '</td><td class="num">' + (PO_OPEN(p) ? '<b style="color:var(--warn)">' + fmtN(poRemain(p)) + '</b> ' + u : '—') + '</td>' +
       '<td><span class="chip ' + (PO_CHIP[p.狀態] || '') + '">' + esc(p.狀態) + '</span></td><td style="white-space:nowrap">' +
       (PO_OPEN(p) && can('receive') ? '<button class="btn sm pri" onclick="poArrive(\'' + p.請購ID + '\')">到貨登記</button> ' : '') +
       '<button class="btn sm" onclick="poMenu(\'' + p.請購ID + '\')">⋯</button></td></tr>';
+  };
+  const cards = keys.map(k => {
+    const ls = G[k], h = ls[0], no = h.請購單號;
+    return '<div class="card" style="margin:10px 0 0;box-shadow:none;border:1px solid var(--line)"><div class="row" style="align-items:center">' +
+      '<div><b style="font-size:16px">' + (no ? esc(no) : '（舊單，無單號）') + '</b><div class="small muted">請購日期 ' + esc(h.請購日期) + (h.預計到貨日 ? '　需求日期 ' + esc(h.預計到貨日) + (late(h) ? ' <span class="chip bad">已逾期</span>' : '') : '') + '　' + esc(h.請購人 || '') + '　共 ' + ls.length + ' 項</div></div><span class="sp"></span>' +
+      (no ? '<button class="btn sm" onclick="poOrderForm(\'' + esc(no) + '\')">修改</button><button class="btn sm pri" onclick="poExport(\'' + esc(no) + '\')">⬇ 匯出請購單 Excel</button>' : '') + '</div>' +
+      '<div class="tbl" style="margin-top:8px"><table><thead><tr><th>材料</th><th class="num">請購數量</th><th class="num">已到貨</th><th class="num">在途（尚欠）</th><th>狀態</th><th></th></tr></thead><tbody>' + ls.map(line).join('') + '</tbody></table></div></div>';
   }).join('');
-  return '<div class="card"><div class="row"><h2 style="margin:0">請購管理</h2><span class="sp"></span><button class="btn pri" onclick="poForm()">＋ 新增請購</button></div>' +
-    '<p class="muted small">登記請購數量；材料到貨時在「材料進場／入庫」選擇對應的請購單，系統自動累計到貨數量，庫存總覽會同時顯示實際庫存與在途數量。</p>' +
-    '<div class="grid2"><input class="inp" id="q_poQ" placeholder="🔍 材料、備註、請購人" value="' + esc(UI.poQ || '') + '" oninput="UI.poQ=this.value;rerenderKeep(this)">' +
+  return '<div class="card"><div class="row"><h2 style="margin:0">請購管理</h2><span class="sp"></span><button class="btn pri" onclick="poOrderForm()">＋ 開新請購單</button></div>' +
+    '<p class="muted small">開請購單（一張最多 15 項）後可直接匯出公司格式的 Excel 送單；單號自動編為 DA-A057-請購日期＋當天流水號。材料到貨時在「材料進場／入庫」選擇對應的請購品項，系統自動累計到貨數量，庫存總覽會同時顯示實際庫存與在途數量。</p>' +
+    '<div class="grid2"><input class="inp" id="q_poQ" placeholder="🔍 單號、材料、品名、備註、請購人" value="' + esc(UI.poQ || '') + '" oninput="UI.poQ=this.value;rerenderKeep(this)">' +
     '<div class="tabs" style="margin:0">' + ['未結', '已到貨', '結案', '取消', '全部'].map(x => '<button class="' + (f === x ? 'on' : '') + '" onclick="UI.poF=\'' + x + '\';render()">' + x + (x !== '全部' ? ' ' + cnt(x) : '') + '</button>').join('') + '</div></div>' +
-    '<div class="tbl" style="margin-top:10px"><table><thead><tr><th>請購日期</th><th>材料</th><th class="num">請購數量</th><th class="num">已到貨</th><th class="num">在途（尚欠）</th><th>預計到貨</th><th>狀態</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="8" class="empty">' + (f === '未結' ? '目前沒有未到貨的請購單' : '沒有符合的請購單') + '</td></tr>') + '</tbody></table></div>' +
-    '<p class="small muted">「未結」＝請購中＋部分到貨。部分到貨但不再等剩餘數量時，可按 ⋯ →「結案」，在途數量就不再計入。</p></div>';
+    (cards || '<div class="empty" style="margin-top:12px">' + (f === '未結' ? '目前沒有未到貨的請購單' : '沒有符合的請購單') + '</div>') +
+    '<p class="small muted" style="margin-top:10px">「未結」＝請購中＋部分到貨。部分到貨但不再等剩餘數量時，可按 ⋯ →「結案」，在途數量就不再計入。</p></div>';
 };
 function poForm(id) {
   const p = id ? (D.purchases || []).find(x => x.請購ID === id) : null, m = p ? IX.mat[p.物料ID] : null;
@@ -738,7 +745,7 @@ function poMenu(id) {
   const arrived = num(p.已到貨數量) > 0;
   openModal('<h2>請購單</h2><div class="info"><b>' + esc(p.物料名稱) + '</b>　請購 ' + fmtN(p.數量) + '、已到貨 ' + fmtN(p.已到貨數量 || 0) + '　<span class="chip ' + (PO_CHIP[p.狀態] || '') + '">' + esc(p.狀態) + '</span></div>' +
     '<div class="row" style="margin-top:14px;gap:8px">' +
-    (PO_OPEN(p) || p.狀態 === '已到貨' ? '<button class="btn" onclick="closeModal();poForm(\'' + id + '\')">修改</button>' : '') +
+    (PO_OPEN(p) || p.狀態 === '已到貨' ? '<button class="btn" onclick="closeModal();' + (p.請購單號 ? 'poOrderForm(\'' + esc(p.請購單號) + '\')' : 'poForm(\'' + id + '\')') + '">修改</button>' : '') +
     (PO_OPEN(p) && arrived ? '<button class="btn" onclick="poStatus(\'' + id + '\',\'結案\')">結案（不再等剩餘數量）</button>' : '') +
     (PO_OPEN(p) && !arrived ? '<button class="btn bad" onclick="poStatus(\'' + id + '\',\'取消\')">取消請購</button>' : '') +
     (p.狀態 === '結案' || p.狀態 === '取消' ? '<button class="btn" onclick="poStatus(\'' + id + '\',\'重新開啟\')">重新開啟</button>' : '') +
@@ -750,6 +757,216 @@ async function poDelete(id) {
   if (!(await ask('刪除這張請購單？', { danger: true, ok: '刪除' }))) return;
   try { await run('deletePurchase', { id: id }); toast('已刪除'); } catch (e) {}
 }
+
+/* ---------- 請購單（多品項）＋匯出指定格式 Excel ---------- */
+const PO_MAX = 15;
+const colorWord = v => /^[紅白黑藍黃綠灰棕橙紫咖]$/.test(v) ? v + '色' : v;
+const contractOf = m => { const v = String((m && m.合約項目) || '').trim(); return v && v !== PENDING_CONTRACT ? v : ''; };
+/** 品名規格：有合約對應名稱用合約名稱，否則用物料名稱＋規格；有分項（顏色）再接在後面 */
+function poName(m, v) {
+  if (!m) return '';
+  const base = contractOf(m) || (m.名稱 + (m.規格 ? '，' + m.規格 : ''));
+  return base + (v ? '，' + colorWord(v) : '');
+}
+/** 同一材料上一次請購的備註／單位（自動帶入，可修改） */
+function lastPO(mid, key) {
+  const ps = (D.purchases || []).filter(p => p.物料ID === mid && String(p[key] || '').trim()).sort((a, b) => String(b.登錄時間).localeCompare(String(a.登錄時間)));
+  return ps.length ? ps[0][key] : '';
+}
+const poUnits = m => m ? uniq([m.單位].concat(useFactor(m) !== 1 ? [useUnit(m)] : [])) : [];
+const poOrders = () => {
+  const g = {};
+  (D.purchases || []).forEach(p => { const k = p.請購單號 || ('#' + p.請購ID); (g[k] = g[k] || []).push(p); });
+  return g;
+};
+let POF = null;
+function poOrderForm(no) {
+  const ls = no ? (D.purchases || []).filter(p => p.請購單號 === no) : [];
+  POF = { no: no || '', date: ls.length ? ls[0].請購日期 : today(), need: ls.length ? ls[0].預計到貨日 : '',
+    lines: ls.length ? ls.map(p => ({ id: p.請購ID, mid: p.物料ID, v: p.分項 || '', name: p.品名規格 || poName(IX.mat[p.物料ID], p.分項), nameEd: true,
+      qty: p.請購數量 || p.數量, unit: p.請購單位 || (IX.mat[p.物料ID] || {}).單位, note: p.備註 || '', arrived: num(p.已到貨數量) })) : [{}, {}, {}] };
+  openModal('<h2>' + (no ? '修改請購單 ' + esc(no) : '開新請購單') + '</h2>' +
+    '<div class="grid2"><div><label>請購日期</label><input type="date" class="inp" id="pfDate" value="' + esc(POF.date) + '" max="' + today() + '"' + (no ? ' disabled' : '') + ' onchange="POF.date=this.value;poNoHint()"></div>' +
+    '<div><label>需求日期</label><input type="date" class="inp" id="pfNeed" value="' + esc(POF.need) + '" onchange="POF.need=this.value"></div></div>' +
+    '<div class="small muted" id="pfNo" style="margin-top:4px"></div>' +
+    '<div id="pfLines" style="margin-top:10px"></div>' +
+    '<div class="row" style="margin-top:6px"><button class="btn sm" id="pfAdd" onclick="POF.lines.push({});poDraw()">＋ 新增品項</button><span class="sp"></span><span class="small muted">一張最多 ' + PO_MAX + ' 項（範本格數）</span></div>' +
+    '<div class="row end" style="margin-top:14px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="pfSave" onclick="poOrderSave(false)">儲存</button><button class="btn pri" onclick="poOrderSave(true)">儲存並匯出 Excel</button></div>', true);
+  poNoHint(); poDraw();
+}
+function poNoHint() {
+  if (POF.no) return $('#pfNo').textContent = '請購單號：' + POF.no + '（不會變動）';
+  const head = 'DA-A057-' + String(POF.date || today()).replace(/-/g, '');
+  const n = uniq((D.purchases || []).map(p => p.請購單號).filter(x => x && x.indexOf(head) === 0)).length + 1;
+  $('#pfNo').innerHTML = '請購單號將自動編為 <b>' + esc(head + ('0' + n).slice(-2)) + '</b>（請購日期＋當天第幾張）';
+}
+function poDraw() {
+  $('#pfLines').innerHTML = POF.lines.map((r, i) => {
+    const m = IX.mat[r.mid], vs = m ? list(m.分項) : [], us = poUnits(m), lock = r.arrived > 0;
+    return '<div class="card" style="padding:10px;margin:0 0 8px;box-shadow:none;border:1px solid var(--line)"><div class="row" style="gap:8px;flex-wrap:nowrap;align-items:center">' +
+      '<b style="width:22px">' + (i + 1) + '.</b>' +
+      '<input class="inp" style="width:130px;flex:none" placeholder="🔍 搜尋" id="pl_q_' + i + '" value="' + esc(r.q || '') + '" oninput="POF.lines[' + i + '].q=this.value;poRefilter(' + i + ')"' + (lock ? ' disabled' : '') + '>' +
+      '<select class="inp" style="flex:2;min-width:0" id="pl_m_' + i + '" onchange="poPick(' + i + ',this.value)"' + (lock ? ' disabled' : '') + '><option value="">— 選擇材料 —</option>' + matOpts(r.q || '', r.mid) + '</select>' +
+      (vs.length ? '<select class="inp" style="width:110px;flex:none" onchange="POF.lines[' + i + '].v=this.value;poAutoName(' + i + ');poDraw()"><option value="">不分' + esc(m.分項名稱 || '顏色') + '</option>' + vs.map(v => '<option' + (v === r.v ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select>' : '') +
+      '<button class="btn sm bad" title="移除" onclick="poDel(' + i + ')"' + (lock ? ' disabled' : '') + '>×</button></div>' +
+      (m ? '<div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap"><span style="width:22px"></span>' +
+        '<div style="flex:3;min-width:240px"><span class="small muted">品名規格' + (contractOf(m) ? '（合約名稱）' : '（無合約名稱，用物料名稱）') + '</span><input class="inp" value="' + esc(r.name || '') + '" oninput="POF.lines[' + i + '].name=this.value;POF.lines[' + i + '].nameEd=true"></div>' +
+        '<div style="flex:none"><span class="small muted">數量</span><div class="row" style="flex-wrap:nowrap;gap:4px"><input class="inp" style="width:90px" type="number" step="any" min="0" value="' + esc(r.qty || '') + '" oninput="POF.lines[' + i + '].qty=this.value;poConv(' + i + ')">' +
+          (us.length > 1 ? '<select class="inp" style="width:70px" onchange="POF.lines[' + i + '].unit=this.value;poDraw()">' + us.map(u => '<option' + (u === r.unit ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</select>' : '<span class="small">' + esc(m.單位) + '</span>') + '</div>' +
+          '<div class="small muted" id="pl_c_' + i + '"></div></div>' +
+        '<div style="flex:2;min-width:160px"><span class="small muted">備註' + (lastPO(r.mid, '備註') ? '（已帶入上次內容，可修改）' : '') + '</span><input class="inp" value="' + esc(r.note || '') + '" oninput="POF.lines[' + i + '].note=this.value"></div></div>' +
+        (lock ? '<div class="small muted" style="margin:4px 0 0 30px">已到貨 ' + fmtN(r.arrived) + ' ' + esc(m.單位) + '，材料不能更換、品項不能移除</div>' : '') : '') +
+      '</div>';
+  }).join('');
+  POF.lines.forEach((r, i) => poConv(i));
+  $('#pfAdd').disabled = POF.lines.length >= PO_MAX;
+}
+function poRefilter(i) {
+  const r = POF.lines[i], s = $('#pl_m_' + i);
+  s.innerHTML = '<option value="">— 選擇材料 —</option>' + matOpts(r.q || '', r.mid);
+  const o = s.querySelectorAll('option[value]:not([value=""])');
+  if (o.length === 1 && o[0].value !== r.mid) poPick(i, o[0].value, true);
+}
+function poPick(i, mid, keepFocus) {
+  const r = POF.lines[i], m = IX.mat[mid];
+  r.mid = mid; r.v = ''; r.nameEd = false;
+  r.unit = m ? (lastPO(mid, '請購單位') || m.單位) : '';
+  if (m && poUnits(m).indexOf(r.unit) < 0) r.unit = m.單位;
+  r.note = m ? lastPO(mid, '備註') : '';
+  poAutoName(i); poDraw();
+  if (keepFocus) { const q = $('#pl_q_' + i); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+}
+function poAutoName(i) { const r = POF.lines[i]; if (!r.nameEd) r.name = poName(IX.mat[r.mid], r.v); }
+function poConv(i) {
+  const r = POF.lines[i], m = IX.mat[r.mid], el = $('#pl_c_' + i); if (!el || !m) return;
+  el.textContent = (r.unit && r.unit !== m.單位 && num(r.qty) > 0) ? '＝ ' + fmtN(num(r.qty) / useFactor(m)) + ' ' + m.單位 + '（在途以此計）' : '';
+}
+function poDel(i) { POF.lines.splice(i, 1); if (!POF.lines.length) POF.lines.push({}); poDraw(); }
+async function poOrderSave(andExport) {
+  const ls = POF.lines.filter(r => r.mid);
+  if (!ls.length) return toast('請至少選一個材料', 'err');
+  const bad = ls.find(r => !(num(r.qty) > 0)); if (bad) return toast('「' + label(IX.mat[bad.mid]) + '」請填數量', 'err');
+  if (ls.length > PO_MAX) return toast('一張請購單最多 ' + PO_MAX + ' 項', 'err');
+  try {
+    const r = await call('savePO', { orderNo: POF.no, date: POF.date, need: POF.need,
+      lines: ls.map(x => ({ id: x.id || '', materialId: x.mid, variant: x.v || '', name: (x.name || '').trim() || poName(IX.mat[x.mid], x.v), qty: num(x.qty), unit: x.unit || IX.mat[x.mid].單位, note: x.note || '' })) });
+    if (r && r.__boot) setData(r.__boot);
+    const no = (r && (r.orderNo || (r.result && r.result.orderNo))) || POF.no;
+    closeModal(); toast((POF.no ? '已修改請購單 ' : '已開立請購單 ') + no);
+    if (andExport) poExport(no);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* --- 依指定範本產生 Excel：直接改範本檔內容，保留原本的格式、框線、公司抬頭 --- */
+const u16 = (b, o) => b[o] | (b[o + 1] << 8), u32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+let CRC_T = null;
+function crc32(u8) {
+  if (!CRC_T) { CRC_T = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_T[n] = c >>> 0; } }
+  let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipRead(b) {
+  let e = b.length - 22; while (e >= 0 && u32(b, e) !== 0x06054b50) e--;
+  if (e < 0) throw new Error('範本檔格式錯誤');
+  const n = u16(b, e + 10); let o = u32(b, e + 16); const out = [];
+  for (let i = 0; i < n; i++) {
+    const nl = u16(b, o + 28), el = u16(b, o + 30), cl = u16(b, o + 32), lh = u32(b, o + 42);
+    const name = new TextDecoder().decode(b.subarray(o + 46, o + 46 + nl));
+    const ds = lh + 30 + u16(b, lh + 26) + u16(b, lh + 28);
+    out.push({ name: name, method: u16(b, o + 10), time: u16(b, o + 12), date: u16(b, o + 14), crc: u32(b, o + 16), csize: u32(b, o + 20), usize: u32(b, o + 24), data: b.subarray(ds, ds + u32(b, o + 20)) });
+    o += 46 + nl + el + cl;
+  }
+  return out;
+}
+const streamBytes = (u8, ts) => new Response(new Blob([u8]).stream().pipeThrough(ts)).arrayBuffer().then(x => new Uint8Array(x));
+async function zipText(en) { return new TextDecoder().decode(en.method === 0 ? en.data : await streamBytes(en.data, new DecompressionStream('deflate-raw'))); }
+async function zipPut(en, text) {
+  const raw = new TextEncoder().encode(text);
+  en.crc = crc32(raw); en.usize = raw.length;
+  if (window.CompressionStream) { en.data = await streamBytes(raw, new CompressionStream('deflate-raw')); en.method = 8; } else { en.data = raw; en.method = 0; }
+  en.csize = en.data.length;
+}
+function zipWrite(es) {
+  const parts = [], cen = []; let off = 0;
+  es.forEach(en => {
+    const nm = new TextEncoder().encode(en.name), h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, en.method, true);
+    h.setUint16(10, en.time, true); h.setUint16(12, en.date, true); h.setUint32(14, en.crc, true); h.setUint32(18, en.csize, true); h.setUint32(22, en.usize, true); h.setUint16(26, nm.length, true);
+    parts.push(new Uint8Array(h.buffer), nm, en.data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, en.method, true);
+    c.setUint16(12, en.time, true); c.setUint16(14, en.date, true); c.setUint32(16, en.crc, true); c.setUint32(20, en.csize, true); c.setUint32(24, en.usize, true); c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+    cen.push(new Uint8Array(c.buffer), nm);
+    off += 30 + nm.length + en.data.length;
+  });
+  const cs = cen.reduce((a, x) => a + x.length, 0), end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, es.length, true); end.setUint16(10, es.length, true); end.setUint32(12, cs, true); end.setUint32(16, off, true);
+  return new Blob(parts.concat(cen, [new Uint8Array(end.buffer)]), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+const xesc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function xSet(xml, ref, val) {
+  const re = new RegExp('<c r="' + ref + '"([^>]*?)(/>|>[\\s\\S]*?</c>)');
+  const m = xml.match(re); if (!m) throw new Error('範本找不到儲存格 ' + ref);
+  const s = (m[1].match(/ s="\d+"/) || [''])[0];
+  const cell = val === '' || val === null || val === undefined ? '<c r="' + ref + '"' + s + '/>'
+    : typeof val === 'number' ? '<c r="' + ref + '"' + s + '><v>' + val + '</v></c>'
+    : '<c r="' + ref + '"' + s + ' t="inlineStr"><is><t xml:space="preserve">' + xesc(val) + '</t></is></c>';
+  return xml.replace(re, cell);
+}
+const xlDate = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? (Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) - Date.UTC(1899, 11, 30)) / 864e5 : '';
+async function poBuildXlsx(no) {
+  if (!window.DecompressionStream) throw new Error('這個瀏覽器版本太舊，無法產生 Excel，請改用新版 Chrome／Edge／Safari');
+  const ls = (D.purchases || []).filter(p => p.請購單號 === no);   // 依試算表列順序＝開單時的品項順序
+  if (!ls.length) throw new Error('找不到請購單 ' + no);
+  const bin = atob(PO_TPL), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  const es = zipRead(b), get = n => es.find(e => e.name === n);
+  let x = await zipText(get('xl/worksheets/sheet1.xml'));
+  const inC = ls.some(p => contractOf(IX.mat[p.物料ID])), outC = ls.some(p => !contractOf(IX.mat[p.物料ID]));
+  x = xSet(x, 'I4', no);
+  x = xSet(x, 'I5', xlDate(ls[0].預計到貨日));
+  x = xSet(x, 'B7', (inC ? '▓' : '□') + '合約內材料');
+  x = xSet(x, 'D7', (outC ? '▓' : '□') + '合約外材料(含合約內溢料)');
+  for (let i = 0; i < PO_MAX; i++) {
+    const p = ls[i], r = 10 + i, m = p && IX.mat[p.物料ID];
+    x = xSet(x, 'B' + r, p ? (p.品名規格 || poName(m, p.分項)) : '');
+    x = xSet(x, 'G' + r, p ? (p.請購單位 || (m ? m.單位 : '')) : '');
+    x = xSet(x, 'H' + r, p ? num(p.請購數量 || p.數量) : '');
+    x = xSet(x, 'I' + r, p ? (p.備註 || '') : '');
+  }
+  // 表頭 C、I、J 欄靠左對齊：複製原儲存格樣式，只把水平對齊改成靠左
+  const stEn = get('xl/styles.xml'); let st = await zipText(stEn);
+  const xfsM = st.match(/<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/);
+  const xfs = xfsM[2].match(/<xf [^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g), made = {};
+  const leftOf = i => {
+    if (made[i] !== undefined) return made[i];
+    let xf = xfs[i];
+    if (/<alignment[^>]*horizontal=/.test(xf)) xf = xf.replace(/horizontal="[^"]*"/, 'horizontal="left"');
+    else if (/<alignment/.test(xf)) xf = xf.replace('<alignment', '<alignment horizontal="left"');
+    else xf = xf.replace(/\/>$/, '><alignment horizontal="left" vertical="center"/></xf>').replace(/>(<\/xf>)?$/, m => m);
+    if (!/applyAlignment=/.test(xf)) xf = xf.replace('<xf ', '<xf applyAlignment="1" ');
+    xfs.push(xf); return (made[i] = xfs.length - 1);
+  };
+  ['C4', 'C5', 'C6', 'I4', 'I5', 'I6', 'I7', 'J6', 'J7'].forEach(ref => {
+    x = x.replace(new RegExp('<c r="' + ref + '"( s="(\\d+)")?'), (m0, a, n) => '<c r="' + ref + '" s="' + leftOf(Number(n || 0)) + '"');
+  });
+  st = st.replace(xfsM[0], '<cellXfs count="' + xfs.length + '">' + xfs.join('') + '</cellXfs>');
+  await zipPut(stEn, st);
+  await zipPut(get('xl/worksheets/sheet1.xml'), x);
+  const sheetName = '請購單 ' + no.slice(-10);
+  for (const n of ['xl/workbook.xml', 'docProps/app.xml']) { const en = get(n); if (en) await zipPut(en, (await zipText(en)).split('請購單 2026110401').join(xesc(sheetName))); }
+  return zipWrite(es);
+}
+async function poExport(no) {
+  try {
+    const blob = await poBuildXlsx(no);
+    window.__lastExport = blob;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '請購單_' + no + '.xlsx';
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast('已匯出 請購單_' + no + '.xlsx');
+  } catch (e) { toast(e.message || String(e), 'err'); }
+}
+
+/** 空白請購單範本（你提供的 Excel） */
+const PO_TPL = 'UEsDBBQABgAIAAAAIQAneJqVlwEAABcGAAATAAgCW0NvbnRlbnRfVHlwZXNdLnhtbCCiBAIooAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACslMtOwzAQRfdI/EPkLWpcWCCEmrLgsQQkyge49jSx6tiWZyjt3zNxH0JVH6raTaLYnnvujCczeJq3rphBQht8JW7LvijA62CsryvxPXrrPYgCSXmjXPBQiQWgeBpeXw1GiwhYcLTHSjRE8VFK1A20CssQwfPOJKRWEX+mWkalp6oGedfv30sdPIGnHnUaYjh4gYn6cVS8znl56WRsvSiel+c6VCVUjM5qRWxUzrzZgvTCZGI1mKB/WpYuMSZQBhsAal0Zk2Vi+gIiTgyF3MmMvt5i2rbz3K3vjkjg8DSbqzqUHJlTwcZGvOFi7SHMeOecOnD8S1K/nPUeQIfeD1gZ++AOSdZA8akSvauWr0POnfwNaToOYVoeFjn1tvKtla2yfl2YA/x8GGV+3V7YSJdfFj7ig7jtQebn+RayzBEg0sIBXrrsWfQYuVEJzBfxD1Vf3MB/7SM+tHL6ueEWuXARNrqH+DxlPlOIyIMswekG1jOgi+5FFoJEFjZTYFezb4g8Bc/OGLoxa8DsYMs81od/AAAA//8DAFBLAwQUAAYACAAAACEAtVUwI/QAAABMAgAACwAIAl9yZWxzLy5yZWxzIKIEAiigAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKySTU/DMAyG70j8h8j31d2QEEJLd0FIuyFUfoBJ3A+1jaMkG92/JxwQVBqDA0d/vX78ytvdPI3qyCH24jSsixIUOyO2d62Gl/pxdQcqJnKWRnGs4cQRdtX11faZR0p5KHa9jyqruKihS8nfI0bT8USxEM8uVxoJE6UchhY9mYFaxk1Z3mL4rgHVQlPtrYawtzeg6pPPm3/XlqbpDT+IOUzs0pkVyHNiZ9mufMhsIfX5GlVTaDlpsGKecjoieV9kbMDzRJu/E/18LU6cyFIiNBL4Ms9HxyWg9X9atDTxy515xDcJw6vI8MmCix+o3gEAAP//AwBQSwMEFAAGAAgAAAAhAFSGbvfjAwAAtwkAAA8AAAB4bC93b3JrYm9vay54bWysVc1u4zYQvhfoO2iFAHtSROrPlhB7IVkSGiAJgsSbtKeAkeiIjSS6FBU7CPYJeu9LFOil132dAvsYHcqW48SL1s3WsCnzR998M/PN8OjDsiq1ByoaxuuRjg+RrtE64zmr70b6x2lqDHWtkaTOSclrOtIfaaN/GH//3dGCi/tbzu81AKibkV5IOQ9Ms8kKWpHmkM9pDTszLioiYSruzGYuKMmbglJZlaaFkGdWhNX6CiEQ+2Dw2YxlNOZZW9FarkAELYkE+k3B5k2PVmX7wFVE3LdzI+PVHCBuWcnkYweqa1UWHN/VXJDbEtxeYldbCvh68MMIBqu3BFs7piqWCd7wmTwEaHNFesd/jEyMX4RguRuD/ZAcU9AHpnK4YSW8N7LyNljeMxhG34yGQVqdVgII3hvR3A03Sx8fzVhJr1bS1ch8fkYqlalS10rSyCRnkuYjfQBTvqAvFkQ7j1pWwi5GGFu6Od7I+VxoOZ2RtpRTEHIPP9ItZNkIqZMgjLCUVNRE0gmvJehw7de3aq7DnhQcFK5d0F9aJigUFugLfIWRZAG5bc6JLLRWlCPd/NiA8+Yj+5m3RUvqOzOmzb3kc3NLmmS3Dv6DOEmmPDbB5RWt1f/X7gM7EfQCPJdCg//H8Qkk4ZI8QEog8fm6Yo9VzO2bOhMBvnlKXOy6Azc0/BglxsR2JkZkp75hYQv7aRontjX4BM4IL8g4aWWxzraCHukOpHZn65Qs+x2MgpblzzSe0PpjqOerod/7pBxWfe2K0UXzrAs11ZbXrM75AlwYDsGpx35qeSANbdFtXrNcFqAXz3M2az9QdlcAY+wM1Hugf8VspD/Z0SDCyTAxsOUmRug7qRFaavDDyBuGg8Txo46RuUWp66BArXtqdaf6L7//+uXPz3/99ocGQvUwRg7C0LhVr+1CrmsiUBbFcY67lPYgIHZW01zVDkBuzdbAN8uyrg7PBavlTQj9W1VTRsrLHhnp4/dfM/7+3UF4gIODswMbH5lbuP9mZMpkCXfM/mbAiP/KwrY98Ar4ZlDX6tEFw8fI8lUU6FKeNLJ7QkkxSAh2UDhAvmOgxHYNZ+hbxtCxLWPixFbiDpI4iVylSHXnBf9H5+8qO+gvU8WyIEJOBcnu4Qq+oLOINFBCq6QB322ykTuMkA0UnRSnhoN9ZESR5xhunNruAMeTxE2fySr3Z2/su0Oze5sS2UJPUu2omwdqTNerm8XZamEtoBfdJriIVdzXb//TwUvwvqR7Hk6v9jw4OTudnu559iSZ3lyn+x4OT6M43P98eHER/jRNfuxNmF8NqNklXI2dTM1eJuO/AQAA//8DAFBLAwQUAAYACAAAACEAkgeU7AQBAAA/AwAAGgAIAXhsL19yZWxzL3dvcmtib29rLnhtbC5yZWxzIKIEASigAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAArJLLasQwDEX3hf6D0b5xMn1QhnFm0VKYbZt+gHCUOExiB1t95O9rUjrJwJBusjFIwvceibvbf3et+CQfGmcVZEkKgqx2ZWNrBe/Fy80jiMBoS2ydJQUDBdjn11e7V2qR46dgmj6IqGKDAsPcb6UM2lCHIXE92TipnO+QY+lr2aM+Yk1yk6YP0s81ID/TFIdSgT+UtyCKoY/O/2u7qmo0PTv90ZHlCxYy8NDGBUSBviZW8FsnkRHkZfvNmvYcz0KT+1jK8c2WGLI1Gb6cPwZDxBPHqRXkOFmEuV8TRmOrnww2doI5tZYucrdqKAx6Kt/Yx8zPszFv/8HIs9jnPwAAAP//AwBQSwMEFAAGAAgAAAAhALys5naKDQAAhTkAABgAAAB4bC93b3Jrc2hlZXRzL3NoZWV0MS54bWyclNuO2jAQhu8r9R0s30PiBMJBhBVLi3alVYVKD9fGccAiiVPbnFr13Tt2SFiJXhAkYIxjf/5n8o8nT6c8QweutJBFjEnXx4gXTCai2MT4+7dFZ4iRNrRIaCYLHuMz1/hp+vHD5CjVTm85NwgIhY7x1phy7HmabXlOdVeWvIAnqVQ5NfBXbTxdKk4TtynPvMD3Iy+nosAVYazuYcg0FYx/kmyf88JUEMUzakC/3opS17Sc3YPLqdrtyw6TeQmItciEOTsoRjkbv24Kqeg6g7xPpEcZOin4BPAN62Pc/M1JuWBKapmaLpC9SvNt+iNv5FHWkG7zvwtDep7iB2Ff4BUVPCaJ9BtWcIWFD8KiBmbLpcZ7kcT4z6D/POvPA78TkcGsE5Ce35n1yagTLaIgIPPB55AM/+LpxPlkqaYTQ9dzmUmF1GYd48XC9wf+3MfedOI1axIBdrAlQIqnMZ6R8Sokdolb8UPwo343RoBc8Ywzw0ERwegAC2Jc0g1/Bovulrag/IiRkeUbT82cZxlAA1j5W8p8xai1BCGQVvP/izU6rCI+tFAzu7Id8kbPcm+siBgP+xjZ1llLubMzryDAt9k6OTYByow48OrIFwJH6l8uJztucrZb6/zfZ7dw7bZUaE01h6r9FInZWlEYJTyl+8xcJ0fN3Fd5fOFiszUx7sFKttdG5vWMO5XJDAoIvygX9p6A9qAnF4/VCf1uFPX8KID0tDm78tSgWoNV3xDAXo4A8UIgQUsEVN8hIF4Qw5aE3oUA8VERkK8TYV/rpdaD7jAM/JDcXYvowoBYM8K2jMGFAfHRVOCmd6lArBF+WxngKceAeGW0c4b1amUuGNQQ2wb32Mr2S7UZBvXmlq4gtTft4MK49SY8q/rkv/a2V0Ol4+pO0lZHbU9y9WdrHbU/SRQOrxh4PU057Z3i2vsfAAAA//8AAAD//6SaX2/bNhTFv0rgxz0skWyn7ZAEqKw/lmMbKvYJgqBdi6HL0GTd1x8lnst7eK9cxOtb+8shRR2SVzySb54/f/z4Uj+8PNzdfHv69+Lb7aJYXDz//fDXc/jXb8W7xcXnl9vF8mpx8fjP88vT1+3HL3+MpFjc3TyO8nrU3y7WQRnwc8Df765uLr/f3Vw+QtIkySVI60jnyNaRPpLlQrrZWXBvwd6CgwVHC4YIVukqHzCQEVwGk5JT5ZlOjfrbxWpJThXGqSRJTjnSObJ1pI+EnLLg3oK9BQcLjhYMuK46FcHaORVu+aw1NepvF9dh1aU1VRqnkiQ55UjnyNaRPhJyyoJ7tEl3uY/gTQIHqzhaxRABrakIvFOrGafK07uvGvW3i7dk1DI3ahMV16RY5Yo6Kt6l+2ksaOUq4nVnwdaPY51fpcc4whJJc7oyhWIXNcVVGsoQCRkXgTdufaZxoz437toYFxVs3BtjXFTQcJtI1MpWLpOcs2DrB/LWOIeBFFr3HLl3ZI/BaasDSJn6OToyREJ+R+D9Dr64Lf2jhTrqc7/fGb+jgp8jhVkftUjEzcaCVi6T/LZg6wdSmCrcRwnPfGHKz25msGbj3dux7S04WHC0YIiApiMCPx1vzpyOUR8qLD+KTFnYiESsrGfamE3e2DatBd1MJ2bjbW2bfqaN2Yq7KMkWj9lGQ5SQlxF4L0M1fdXSvnj5/OXxz+qJj0PV2Dg85NMe21hQW9BEcJ2atBZ0ERT6lNpaSW/BYC/zIQJ/u8G0Vz2c5273/dg4nAZDVU5VvTAbu4qaVagk+jQ3O3sDjZpQO9I40kay1HrbzYynNNt7O6cx+7uHJhuz2eA7aHTMA0aoB6IIvOfhmeFNX139WoYL2oP2rO9TB5Px44Hb3GGFvy71jLLxqPao8aj1qNOLS23YetQDrfVpvhOkD6W9ID4Vl6YUHaR3vZ/jbDtTjgaI+Cw/Gh/iijuiFnO556wZiTEhbIVxRsx6qqbuQ5DiGUHyUFR7VeNR61EHFC6uM5LGI6iHKpsRhBueESCtNgfpnv13qgEqdvtUdCrmstNZbseoAbfNzqym7sMs69bcCGK3EVcUNV7VCnqbrO2ACkVbj3ppyOsfV2S3gdS1g/TFbjvVABW7fSp+hQfHT1abGFfgttmd1dS9cRv5ht12qJGGqmoFsdu4OLvtUC8N2W1ckd0GYrfRF7vtVAO6Z7cpwk1vQn6HZnw18uluvb76JRj1aSoG5ZU+77JXCOOD0z18z9oHiEyx6pj6V03dm5lBgOKZcaiRhjwzUPHM4OI8Mw710hfPDPrimQHimUFfPDNONaB7nplTGbEYw4x9t3WW2whM0W1zbq2m7k2Njw2o7Nde1XjUetQBZTUe49EJ6KHKajwyHLsNxG6jL3bbqQZ0z26fSojFmFV+yu0YdlB1zIm/mroPJ21+oiIuqR21qBQ1HrWC6CAJlLmN8bDbyGO8toHYbSB2G32x2041yLjoXeSpAFhkCTD8Z3xLe9bajnEIbpvwVE3dG7cRqNhthxppqKpWELudLq7nFyB2G4mN3QZit4HYbfTFbjvVIOMit09FxPDop7X9f9xGpIuVxCamqXvjNvIcu+1QIw3ZbajY7XRxdRuI3UZgZLeB2G0gdht9sdtONchQ/Uk8C6TibThJvi4YpXQ3BSOTM6vxi0Y4/2fncIdqr2o8aj3qgLKqgQGxs4iF7CwQOwvEzqIvdtapBgxiapd/sMhS57nOjm/3YtafnLWZE39mZz2qPWo8aj3q9OppzQrSld0D8dNPEDkriJyVvshZrxqAZpzN0uPZzmbR0b5rrEp8kaInnSCqBh41HrWCqBoA8ZoVxM4iytGahWrNzkLFzuLm2FmnGmRcrhqUWVI829ksJhY2J06d59XAo9qjxqPWow4ocxYDYmcR29hZnxPR15qdRV/srM+JaDizZrNUeLazWSQsbCYskY70Y8PGo9qjxqPWow4ocxYDYmcxCHbWZ0Lpnp31mdCrBqAZZ7NUd7azWaQrbKYr45+zOutQ7VWNR61HHVDmbBpQepMkDbX+7ASp/3ugbM36TOdVA9CMs1mCg7NzL03xQ4P349/G9/HZp2Qb3CAaq7u+oTZ5YyMirXa1ImpnTs6NiPjDZ2kOfK2K0oeruXZLc5zZzors5yw/8p0gfcd3D6SvzPYg2fRFO8P8yDiPUGkRGsRzPUdLT766ZxkxnrYDiie99unb14fp48oUZn44zUh+OjlVGVFolT5gAfFXr6X9XcGcxjw2ujmNKYA9NOHXHnL5nSA1bw+UWYxxs8URscW4X7L4VDAsR1dTDP8Ji2PTFVscEVncT1ebfuSit42GfNsufB3QMFtZUcW3ja7ottGTX1k2ocXPna9eWbNfXUpkKX2qVUDjRKbasTQ1ewMRfcDrpZ3e3U6QFtU9ULY+4hgyoyJiozBQMgoJzBtl49aPjJr5Jcq8UfgSxt/Plq7sQkRv6UuHaiD6yNeIKuvd1OvWt+uAxndYOlemXm9FpKPqZ9uZEr7z7e4FpVnYg2TziUxHFTUSXWSD3DBNJ2Kfm87xp3rZdo/vgU7+fu/91OB2ER5+smMrQbrVNx7VgrTCNV7VCqLAAbSkz9mCtEb0XrXzqj0QGToAaVcfROTNmott4zHgVa8aljHGhK2vziHs6K1toKK9XwOFYUnDxqtaUeksdIJ0aWy9qhekT76dIHq6A61VNQCxc+4D3qX+YvQ/AAAA//8AAAD//3SUz27TQBDGX2W1B07QeNd2EpskUjdtGptSEH0Ck2wSi9RrbVyqcisSUqsiwaGiVFSCS6UiIg4IqS0I8TKNQ96CsVuSApM9OPH88s2fL2NXNqTuyrrs9wekpTajpEoti9Yq0zDRslOlS8xtMlr4P87dJsfipts0kbhnu/dsJC4ct+Eg8VVmuKsmVnkNyBq3sFyMuQ2GaTwgPkoE46DBJvGA+CgRzAQNOiUQHyWCWaDBuvaA+CgRMGmDGZibQHyUCGaDBnPaA+KjRLAiaIponSJoMCJYCTQlVFMCDUYEK4OmjGrKoMGIYLAgDNsQD4iPEsHBN476BsRHySK33UWO9sbBA47Ns8gdd4ljvS0DaaBEcNhRju4oEB8lgsOOcnRHgfgoERx2lKM7CsRHyYppwMOL+gbEn0Oga/Q5FRw2Hn1OPSD+FSnM3kK1StxTkUzC1kNNOipKvHaVckqS7VhWaaTqKnoq9SBUUbZAsQ6j5EGcwO2A9JQOn4Ei6NdllEgtQZlbHAddeT/Q3RB+1JcdeMcZC6ZjGvbsOA4lOuz25rFExZnKKVsGL02PY1PyWCWJ2piTsieDttRzYEcp6LJKSwtlq8Snhznm8p38b876XpfJZkziIJZ6PXwGFkCjg1bQh28lixIYGWYNMgOqNFY60UGYwChuCMNrr53Pf9VFIy9Xq6h2u5m3VbsVbMR3V/PrSn6t51eanh6lJ2eTTwe3x18O4YPmYbNI8jPZOUjfvkw/vp+8+z46Oxmf7qfHe5Oj16MXw9Gr80phlj8rdV31Rqkb6bNC397Qy5+ff50+H+/tpsdDMh4OicEJ3BFucHt08dVw0uNdw0wPT/Isj/5t8jrL+PzH5MOOm+mnBwLk8mI/T3ozmHf5x5DC3/70ZTdobS/pYCuMus3GzMv8PylsKf1k0JMyqf0GAAD//wMAUEsDBBQABgAIAAAAIQAwZ/kkzAcAABgiAAATAAAAeGwvdGhlbWUvdGhlbWUxLnhtbOxa3YscuRF/D+R/EP0+nu6e78XjYz69Z++uF+/Y4R61M5ppedWtRtLs7nAcBN9LAiEQuITk4eDylIcQ7iAHMQkhf4wPm8vlj0hJ3TPd2tGcvf4gl2N3X7o1vyr9uqpUVS317Q8uY4bOiZCUJ10vuOV7iCRTPqPJous9mowrbQ9JhZMZZjwhXW9FpPfBnZ/+5DbeUxGJCQL5RO7hrhcple5Vq3IKw1je4ilJ4Lc5FzFWcCsW1ZnAF6A3ZtXQ95vVGNPEQwmOQe2D+ZxOCfrmn7948Ycvv3n2j2//+CvvznqOEYOJEiX1wJSJEz0DsQQNdnYWaIRcyQET6ByzrgfTzfjFhFwqDzEsFfzQ9Xzz51Xv3K7ivVyIqR2yJbmx+cvlcoHZWWjmFIvTzaT+KGzXg41+A2BqGzdq6/+NPgPA0yk8acalrDNoNP12mGNLoOzSobvTCmo2vqS/tsU56DT7Yd3Sb0CZ/vr2M447o2HDwhtQhm9s4Xt+2O/ULLwBZfjmFr4+6rXCkYU3oIjR5Gwb3Wy1280cvYHMOdt3wjvNpt8a5vACBdGwiS49xZwnalesxfgJF2MAaCDDiiZIrVIyx1MI5l6quERDKlOGVx5KccIlDPthEEDo1f1w828sjvcILklrXsBEbg1pPkhOBU1V17sHWr0S5MWzZ8+ffv386d+ef/rp86dfogO6iFSmypLbx8miLPfdn37zn89/jv791y++++y3brws41/+5Zcv//6v71MPS60wxYvfffXy669e/P7X3/75M4f2nsCnZfiExkSiI3KBHvIYHtCYwuZPTsX1JCYRppYEjkC3Q/VIRRbwaIWZC9cntgkfC8gyLuDd5ROL60kkloo6Zr4fxRbwkHPW58JpgPt6rpKFJ8tk4Z5cLMu4hxifu+Ye4MRy8GiZQnqlLpWDiFg0jxlOFF6QhCikf+NnhDie7iNKLbse0qngks8V+oiiPqZOk0zoqRVIhdA+jcEvKxdBcLVlm8PHqM+Z66mH5NxGwrLAzEF+Qphlxrt4qXDsUjnBMSsb/ACryEXyZCWmZdxIKvD0gjCORjMipUvmgYDnLTn9PobE5nT7IVvFNlIoeubSeYA5LyOH/GwQ4Th1cqZJVMZ+KM8gRDE65soFP+T2CtH34Aec7HT3Y0osd786ETyCBFemVASI/mUpHL68S7i9Hldsjokry/REbGXXnqDO6OgvF1ZoHxDC8AWeEYIefehg0OepZfOC9L0Isso+cQXWPWzHqr5PiCTI9DXbKfKASitkT8iC7+BzuLqSeFY4ibHYpfkIvG6F7qmAxeh4zgdselYGHlHoAiFenEZ5IEFHKbhHu7QeR9iqXfpeuuN1JSz/vc4ag3X55LrrEmTItWUgsb+2bSaYWRMUATPBFB240i2IWO4vRHRdNWJLp9zcXrSFG6AxsvqdmCavan6OsBD84n/T+7y3rset+G36nV15Zf9Kl7ML93/Y2wzxMjkmUE62E9dNa3PT2ng/+tZm11q+aWhuGpqbhsb1CvZeGpqih4H2ptjqMRs/8c59nzll7EStGDmQZutHwmvNbAyDZk/KbExu9gHTCC7188AEFm4hsJFBgqufURWdRDiF/aHA7GIuZK56IVHKJWwbmWGzrUqu6DabT8v4kM+y7U6zv+RnJpRYFeN+AzaesnHYqlIZutnKBzW/NXXDdmG2WtcEtOx1SJQms0nUHCRa68FXkNA7Z++GRcfBoq3Vr121ZQqgtvEKvHcjeFvveo16xgh25KBHn2k/Za5ee1c75516epcxWTkCYGtx29MdzXXn4+mny0LtNTxtkTBOycLKJmF8ZRo8GcHbcB6d5X337wu46/q6U7jUoqdNsV4NBY1W+334WieRK7mBJeVMwRJ0AWs8hEXnoSlOu94c9o3hMk4heKR+98JsAWcwUyWyFf8mqSUVUg2xjDKLm6yT+SemigjEaNz19PNvwoElJolk5DqwdH+o5EK94H5o5MDrtpfJfE6mquz30oi2dHYLKT5LFs5fjfibg7UkX4K7T6LZBTplS/EQQ4g1WoH27oxKOD4IMlfPKJyHbTJZEX9XKlOe/a1DriIfY5ZGOC8p5WyewU1B2dAxdxsblO7yZwaDbpvwdKEr7FuX3VfXam25oj52iqJppRVdNt3Z9P1V+RKrooparLLcfTXndtbJDgLVWSbevvaXqBWTWdQ04+08rJN2PmpTe4cdQan6NHfYbVMknJZ409IPclejVleIdWNpAt+cn5fPtvnpE0geQzhFXLLstJslcGday/RYGN+e8tkqv2QySzSZz3VTmqXyh2SO6Oyy64WuzjE/PM67AZYA2vS8sMI2gs5uzxbUxS4XzRbsRjhrY6/0q7bwRmJ9zLoRNluLLtrqcn2irnt1M7N2WPbUJg0bS8HVthXh+F9gaJ2zw9ws90KeuVR5pw1XaClo1/vYb/Tqg7AxqPjtxqhSr9X9SrvRq1V6jUYtGDUCf9gPPwF6KoqDRvYBxBhOg9gq/wzCjG99ChGvD7xuTXlc5eZTh6rxvvkUIghdn0JM9EcOHjgSaIWjoB72wkFlMAyalXo4bFbarVqvMgibw7AHRbs57n3ioXMDDvrD4XjcCCvNAeDqfq9R6fVrg0qzPeqH42BUH/oAzsvPJbzF6Jyb2wIuDa87/wUAAP//AwBQSwMEFAAGAAgAAAAhAJgROEpyBgAAgTkAAA0AAAB4bC9zdHlsZXMueG1s5FtPb9s2FL8P2HcQVGCHYYok23Li1HbWJDVQoBuCJQN2KBAoEuUIk0SPojO7w4ABA4ZeutOw7bDrTtuhhx62w75N223fYo+kZMtxnVCqGcVdDrFIkY+P7x9/pB67e5M40i4QSUOc9HR7y9I1lHjYD5NhT//0ZGDs6FpK3cR3I5ygnj5Fqb7Xf/edbkqnETo+R4hqQCJJe/o5paNd00y9cxS76RYeoQTeBJjELoUiGZrpiCDXT1mnODIbltU2YzdMdEFhN/ZkiMQu+Xw8Mjwcj1wanoVRSKeclq7F3u6DYYKJexYBqxO75XraxG6ThjYh+SC8dmmcOPQITnFAt4CuiYMg9NAyux2zY7renBJQrkbJdkyrsTD3CalIqWUSdBEy9en9bjKOBzFNNQ+PE9rTnVmVJt488EHH221dE1o5wD5TKfy998UY07sv/3wuHuJY/L765Yl48P2s4qdfxYNu5qMtkN5eJH3ngzt3rFNtRWMwrSIfp8b7Gu+wZVmnxt1Hi0X2VgxtiJ+9PWh0anx4aqwg31lBvkibkyhJeAd85LL8Hm3F8aMt32esmJkW+t0AJ3NlNEEZrKLfTR9rF24Emmiw5h6OMNEoOA3owuZzcWMkWrz68dnfz5+9+vn7f3/7gb0J3DiMpllv3vncJSm4oKDXbLM67oAZgTgEd+BMiaFvGQMdxdM1uQZAbmEUzbyiwRQBFf0uBBCKSDKAgpY9n0xHoIYEYp2QGm93Teshcad2wyl0MPmA/e4ZJj7E1twf7TYMLer63QgFFLRFwuE5+6V4BP/PMKUQgPpdP3SHOHEjZk95D4meEKshLPf0GPnhOIbRhHW5Y4oz4wJqbIjrR5AgxaaQzUCiNZ8pn6hEYxBHLo3a5iS0Uhuzi8ZROxtvo4YVzknChxV62CyU1Ow89fNRSsVlInA57VWJJaWXgXIxogT5TfKT6mupMlPJI3m1Ad7QhTP4kAIWQFF0zPDBZ8ECGJoEBQzPwW1C2U6BPQL+yR4F+hCFfteNwmESowSgJyI09Bie9aCIBNqcBP3uAll7m6N9QdheSVhzR6NoOgCYzIcXJeBhXtrnkGpevpczMq86Ipgij/IdrQUYSIJXsygbIamCkNoMu5eXkjYJqoqroIUrhJXTL0oNmnOpFeRiL8jgHJPwMQi4oDFJHdbGFIBBDq6XrOpGOToAoYXJGI9T/XYJjMFwWZaYNcE8+EHAai9cNKyPx/EZIgN+kMN2ERtgbuUDlEJTmkfIug2Zb8FkTaXFD1DWaivl1aKAiRLxsZRniXO1en2rfIzKjgNrVrOE90HcuWq9y3HB4mInB04kRm/Ijl7n6ttUxqSStc/ZLHbBStQBLo2iCf0EU/ikwT7ENBxxnFgF8cAZvJyjKDNVe1ti6Zh5VA4oZGDG3Mvr9DP7GlNQHIvsekOh/PCKVlqZxUI6Xt9SpJjtpdcYFmzp1UGJSGD7r2r5tsUXuY1DXjJs263LclMcJpWs9PCls+41SSZoSAOSCudfUspeYuDWKVvK15Z8fSNtVnqRrxWKbIRnSQf/WkWpbj+yxgNDFfpeccyhfUnc0QnsS/LUgdec6vOEn6tX3iXcsTlAfyMsAtK5bm6/t0ZACnvEjeT7RvfXa5S30vMLlqdU5bBiGd+Kj3/5ocDt2PCrO1hb48qwtFP4v0iy8vIlsSdQIVSV/KpYsd56eHA90JGwlBvFCmvheB0Lgkpbvhlgw77JbhyqWTPTNwNpFDLNri+gI4KCcLIqQ6ESklBp3iqErpJfFZt4lfyqwbtKUjiq5NPxWzx1nXmXSYwopnCwdfT1KYWX9oJXnxHI5/RBFl8h8XEh7XGW8qclcOGmp7/445t/nvxe2JSejcMIMr5EDh9scC53ePn025dPvnvx19O8D2xaCn2aPGdt1gn48CfzxEuLvaXsphpPyZxxBhLyUeCOI3oye9nT588f8ZsdcAqUtToKLzDlJHr6/Pkhu1UC101gDDi/eZjCNQ341cYk7Olf3d/f7hzeHzSMHWt/x2g1kWN0nP1Dw2kd7B8eDjpWwzr4unBf7g1uy/HrfZA7abd20wju1JFsshnzx/O6nl4oCPa5/IDtIu+dRtu659iWMWhattFquzvGTrvpGAPHbhy2W/v3nYFT4N2peKvOMm1b3M9jzDu7NIxRFCa5rnINFWtBSVC8YhJmrglzfney/x8AAAD//wMAUEsDBBQABgAIAAAAIQCJ15AkGQQAAHAQAAAUAAAAeGwvc2hhcmVkU3RyaW5ncy54bWzsWF9v2lYUf5+072D5KX1IMARIiMBVlanS3ipte54QcQoS2Mx2omVPJCEhLKUwkTllZQlOR0dJS6CEwDB03yXiXttP/Qo9xgwo0Je4k3iokRD33vPnd8+953eO8d7/ORImthleCHGsj7QvUSTBsAFuI8Q+9pE/fP9wcZUkBNHPbvjDHMv4yB1GIO/TX3/lFQSRAF1W8JFBUYyu2WxCIMhE/MISF2VYWNnk+IhfhCH/2CZEeca/IQQZRoyEbQ6Kctsi/hBLEgFuixV9pNNOElts6KctZn04QXuFEO0Vaf35W3x2qrZe6O0iuqro8WRP2UXvmlrxX6151WvFcKWx4qC03LnXJtJem6H1n6aivaqtUa5Ft8fucq9SBNqrq/nz0cwyoTZqarO05lpe8bgp+/KECWOHa0LUH4CdwxYEht9mSJoYPdrlsVbvIKnSV4wGIUZiKPCIJzY5Vvx2w0c6SELciYI6y61z7CDQpO0jnKhZVEvHWD6CPbzv/DG5DYdz3eWmqHXKsfgdRTk9VlwN8c52ZSJBmZRaqs1A8s2DxQeUa4XAUlW9/Ac3mrh6jZsyeiIhpYA6Nf25YlqwAlHPx3BtD58WcX5WNLDUBR8oX9WVsxkQZ0KzHjETVK/dRlnZpsdeqA0ZNgu3awYE9NseepZE+X0rbimPY9Xp9jgcTitWbqUsyhyp13F08Df+M4OlnDVr8sDaX5JpbQFlLkcO2hfg4J5VDwc3PUVaQHs5raTg13GtXMbPnlqyqiv7OCbj8xNrB7K6Ah+3x+SIO6a6XjjAr+XJDEfZXcg57WUaFzpTa1Kl101NzuLfW3oiPSXbD9rHszzt5R/Bl/ALse0PA8U7DPYJcGGOJ0QgbKAmuzHDPwTGMkWMHLquQtT1yxNjadMfCYV3Bup97aCfF5iBtH3Zbcz12Z8xhSIhluP7JNd3LdKaXAKOxI1d4DnIGPWkrr17uWCS0T0zq0zUBtp5AHx7mJ0vQCbnqTdZNXMI4FDySm11h8Px31o9ob2V1YoMkvp+CYTxUxmKlBlmGJrRn4j6WNmcYAxcaKnVrpaoj/t833kyQQUo/Svqp+5Qfghq6vLWSzie7rWPIRumLqtI25fMLPnReObqFD7RDszXTcHlCz0XH2K6E1HNRw5KA6KcF1JAiTb0OdqbJFDjl/h+/ioBPYVWL3+J7/9VhdHZMeqktXIKQmzt/or0rSSjShIdlAy6eXUKxQB6l/GjG72Ggah6FdP2u2PLd2yfDFMnF9D8fx5TcVnrKKgax7UcPs/ORD+b8h1LMxphbPa/euEI+Bfnk7j4ptdSjNpZTmEp0VNucDKFEoe99hF0P1Cdzf6HmCyPn6yb4wXYSis73ktMOe+3ZuPNweggB69/i3fzbYN/DOgPAAAA//8DAFBLAwQUAAYACAAAACEAzzO88zwCAAD6BAAAGwAAAHhsL2RyYXdpbmdzL3ZtbERyYXdpbmcxLnZtbIxUPW/bMBDdC/Q/EOyQpYYlN45bxjI8dEiB7B0DVqIs1vwqeXLkbN07dugvLNB/0SMlp7ZTGxYgSiTv3j0d39O804rgbQLbFLT1hoWyEZqHkZalt8HWMCqtZhut6OtXQ6Q9F2nrWpaC9Y9/Od0FOaIrhaILrDO3LDTcCcW3tgWyYaKDgopKQtqO+7LS3B3skIoDL2hOxwlifICxmG96SNg6QWRV0Icuw+sBZlNKSmt9FeSTKOgkv8myt2mkBCEcFsYQJIUz50UtvEdeIDcYDJQ4Dk1B9fJ6OVU45PnyQz9MO0FJLZUSWKymJIC36/498iORUFoiX600AbYKAbUE4fsPiAG19bpVPKSEtEDEN1NQWRMljfjo+aMhTnZC3eP0s6ygIdmQvhceWk2WGclP7WUkI8uhb4lY3Zdx3lZkOcHEyUvQfvMdSa3qSSQCF0XeCblq4CRT5HoK5uYcm9kFbFIz3g+B/2lW/10HSGfZ5tkR1nx8dHB4kFElqB+UsW+DtMaukyZWnldSGEhij2soKMtKa4woISq1oB7fdoKwTNlyfSh6HhxGeBQk2nKIjAwSZIR4Vn5S/f1dr+o9B4Q8m6AH+nJv9m3BFYr/z/efv3/9INfJAr1Mr5wNEgsaxr8Eq1oQt5r7lTQjJWpg2W4G1uHkMcqS5ZOZg9smnfswiS54GklTiY7lVztTSM1XIloZO4FOi0T9pyqPtEFCNMkzo2T0+DN42RZvIbYEvXLck8V8jD+8xV8AAAD//wMAUEsDBAoAAAAAAAAAIQBd+B6i+kcAAPpHAAATAAAAeGwvbWVkaWEvaW1hZ2UxLnBuZ4lQTkcNChoKAAAADUlIRFIAAACqAAAAqggGAAAAPXbUggAAAAFzUkdCAK7OHOkAAAAEZ0FNQQAAsY8L/GEFAAAACXBIWXMAAA7DAAAOwwHHb6hkAABHj0lEQVR4Xu19B3hcZ5U2W0jiomanQEKAEOqSJQH+JMsu7MLSFtgFtlC2QCCxJU3vI8lF7lVy73Ycx07c1HuXuy333uVe5G6526rv/7znmyuNRpItWW0kz/FzPJqZO/d+9973nu+075xPIECtolrUAqhRXFvLD1Bby/fVqEUNauR/bTtygNqDPuH7QYAeQQJKwlEBktBUnzXYKADUdqYAUFtLtQ0lJ8FYXXUfV65dwOUrF1BbU61t6AFrgNqDAkBtNXlg6pn2a2prUVp2FiuKC/FRXj5Kz19EVbWvhA1QWykA1FaSwqfSQgnSszduYUzaavzj0Hn4TsxcDEtYhROXy1HNDQPUbhQAajMkGqZgTTONlM7pPZ2fuHoDw1M34fVhyQg1JyHMnIzXBq3AiKRiHDp3ITD1tyMFgNoMCcQ8/2n/vI2j0kvXMDF7G94YloYQazr62PLRx5aHIHMC3hr+IZZu2I7y27e89higtlAAqA8jpYY2sPH5euJKOSbl78CbI1PQ15SGIHshwlzFCHEWoI89Ey87F2FGfgkul5f77jFAj0kBoDZLXlN9bTVQW4WqmgqcvnYFozI34fVRqehlSUGYIx+hziKEugvR15mLEHsW/mFMJjJ2ncCDqkrfnQboMSkA1GbJM+GLoko7vxql124iOmkNvjosGb1s6ejrKkR/Vz76ufIQ5s5DH1sWnrOnwbF4DUrLrvnuMEBtoABQG5An0iQTfLUwqbqmCttOnId9xXp8ZWg6gu3pCLLnIsxVKAANc+Uh1JmLIGs6vhidisRNB3Dz7j3fnQeoDRQAqhepaZ7WvpKipPuVFdhw5DQcy9fh1agk9DJnIdiej/6uAvR35nuAWoC+9hz0t6fix3HZOHTuEmqpLgSo3SgAVHGMKn1UoFln2NfizoMKrD54EpEfFuKVqAQ8Y8xAqLMQ/ZwKpOR+LoK2EM9YMvHK4HREJ27ArXsBadreFACqZtfXKtao/M49JG85iF9OycSLzkT0sWQizFWEMNFJFUiFXfkIcxShlykd34vPQ+a+Y6iorqrfdYDahZ54oCqDyRMS9Xxy9OJlTM/dgn8am4rnnOkItnBaJ0ALEKIB1cP8u68tDy860xCxeC1OXrsuESu1pwC1Fz2RQNUcTypVT0WeSPeqK7D68HHEJKzBd0amItRC6z4XIY4i9HfSV5qPUEpQAtQz7RO8T5nS8XejMzG/eBeqRJp6BwkC1B70BAJVg5Anp9SjnV66fQtZ+4/jT+/n4YtRK9DHkIwgWz5CXIUIJTsLBKDCNKKECxDqyEdvUxL+uKAIJUdP1e1PywcIUPvQEwbUeue9lqRHSJ28Xo6FG/bgRxPS8Lyd+mi6AJBS01uK1hlPzlz0p+/UWYBgWw4+H5WE8TnbcOHGDc8+VSpggNqPniig+so4Ro7WHzoJx7JV+NqQlQh1ZiDEkYtQpwJnP2eeAFOTpNrfBOmzrjyE2PMQZM3Cj+MykLnrCDNTZb8CUqoUgQyqdqMnAqg0lOqNJfkEZ6/dwMI1e/DbWbl4NSYZfW0ZCKIU9UjSEJea6pUeWs/qc+qrhQi256GfPQ2uFWtx8NxFz541DTgA0vakHgNUBY/G1PCzWly/cxclx85hbNZWfG9cBp610YmfiRBnMfq7aDQVyJROQIa6ChpY+ASu+rwIwc5ChNizBeTLNx/Ejbt3PUfQkld8jx2gtlCPAapmGjUNjlrcr6zC8cvXsWLzIby7sBCfjVqOXqYU9LXReb8azzoK8KyAtEic+ppuqvlMlb6ap3RTVyH62vPxrCMDP4lPx95zl+uP5PHHqoyrALUX9Qigig1PcAhAPJD18otev3sb2XuPwrp0Lf7f8BSEWVagjz0doa48T5RJRZokuYRTu7PAy/3kzXl41kmwFqK3JRufjUrHoKSNuHwrEInqaOoRQKWDvX65Xb21fa+yEiWl5zA2fTN+MikLn49JQ6g1E8HWXIQ6ChDq5jSuJGVjUDbBznyRuvxtkDkdb4/OQc6+U7hX6YlEBajDqAcAtRY1NQ0Ber+iAntOnMKCVTvwzvur8NqwTITZU9HbkiW+0X7OIjwr0zsNo6aNpiZZpGwhellz8GlXKt5ZUIyz5bdEkncmVVVV4dq1azhx4gTu37/f4LuGRmPPoR4AVBJvTjVuP3iA0gtXkbbtEMyLcvDW8BXoZ0vAU+ZMCXNS9+S0rWL0nPYJPBpMymhqCdP5/0lTOr45OhPTC7ejqrrzs6SuXLmC1atXY+HChSjZtAnnzp3DvR6eCOOnQG25zcxpv7K6GmfLbyJ1x2EYFxfijaHL8JxlBYIsqQh25Kgp26FS8whKyR9157R8yvfiEEcBeptT8dv5q1By/IzvcDqFtm3bjrHjxmHgwAFwu1yYP38+Nm/eLFKW0rYnSlW/BGrDEKdKGKnLxvOiB9VVKL1yDYtL9uFP8/PwRmwKnnemI8SZgxBHnuiSNJYIsP6uXHnVpnqCtMVTvofDnHnoY83C56NTMCJ9K67cvt1wQJ1A586V4cPFH0FnMCFcp4PeYITZYkbMoBjMnDkTa9euxYULFwSwPYn8G6iePNGGVIPrd25hy7EzmLNqD95btBpvj07FZ1wpCLZmoK8tF6HMdGo0rbdeevoyI1a9zGn48aRMJG075OUQ8x1jxxDBl5uThyGxw/FuuA56k0WxwQiDwQir1Y5hw0Zg/vwFKCgowtGjpbh1q2eshPVLoDZ14+9XVuLc9RvYcPQk5q7aggGLCvHmqEw8a03FM/pE9LXkINRRKMaOd1JzezElcTCltC0Z9hVrse9smWeknQNUGozHjh1DfPxk6AwWRBgsMFrtMFrsMFscMJvtMOjNGDgwEgaDGbGxIzBv3gLk5+fj4MGDotdWVDzw3W23IT8FKqlWDJU7Dx7g5JVyFB86jWmF2/F/87Px9SEfI9i0DE8ZuJ6e4CxCf1expOIpx7yy5n3B1hYOceQj2J6DLw9Owocb9+PGPRWJaj7I0L5UfqMcK1asgN3hRHikESarC0arAyazA2aTExay2Qmz2QmDwYrwgXqEh+vgcLoxffoMZGdnY+/efbh48aJ4Cqq7wAhsC3U6UOvkzyPu7p3797Dn5Bl8tH4HTB+vwvcmZuLlqGQEm5IRItKzCGHiYmImk3I50VEv0SNPMkl7sKbHBtlyEebIxL/PyMTWE+c9o1Q5BB2d0kdgbdu+DVFR0SItDSYbjBaXsNnigsXshsXkhtnsasAmkx06vRmROqoFDowcOQYLP/gQa9aswfHjx3G3Gy1A7FSgPiqo+KCqAofLLiJ9x0GMTd+AP8zOwndGJOCzzmRx1Pe15qGvLR+hdkpOupooNQlMGkpKitYlNrcDh7lzFTNkasnGi45kTMwqwfnrN9WAqUPX8Jw6FqilR0sxd/Yc6HQG6I0WGC1OGMwuYZMGykbslleDyQGd0Qad3ga9wQabzY3YoSMwbeoMJCYkYfPmLTh37nyDZThNUVd7EjoVqDW11bhXcR/ld27j0s2bKCu/gXPXy3G47DJWHTqJeWt2w7psLX4xNRevx6bhJUciQkwJsh6ptzUPwZSiLk71BR6QekDlk47XLkD1eAv6uZjhn4dQazreGpEk42TES0hcEfKHz5m2H127dh2ZGVlwOtzQ6ylNqZe6YLC4YXwEmzS2umEwuaDT26HTWaCLNMNksCLKHYMJE+KwZMnHWLNmLQ4dOoSysgsoL7+B8vJy3LhxQ4wxSnQVVOk66lSgcn387pNnsGzDLkzP34opBTsQn7cD0Ukb8Zu5+Xh9RCpecCQiyJSK3qYs9LHmItjhyVhyt84x32aWeL8yzPpYsvCyOxXvvZ+Lcze8XFIenHYcTCESb+KEeESEG2C2OGGkDmrmtN8YmL6sAVXeU8pa3LDwM6MdukiT7DMywgCzyYohQ4Zh5ow5SEhIRl5eIfLyCpCbmyeBBQK4q91dnQrUB5WVmJFTgreHLEaYbiE+ZU/EC44k9LOnIMiWKVIzyJ6HEElcZqqdZxlIne+zCUB1EKvsKZV32suUgW+PyMK8op144HPDOgqonGqvXruGhQsXwWS0Qq+3wOTRS7Vp/2FMYGrcQE0wkWmAaWyHyWhDZIRZJK1BbxUgmwx2hIfr4XJFYeXKlXjwoGs9Bp0KVLqY4nN24OtDUvBJfSpC7IWSUU9mDaf+tiL0cyiDiLqh+D7F1eSd4dQ5HOZW3NdZhCBzKn49LR+bS8+iqoOnQE0XpAQrKCzG0KEjEE5panLCZImCQbix9GyKG0hUC40ttxhelMzCZidMBK7ZDaPRBYPBAYPeDr3eDoPBjgED9XC63E8mUCfk7MbXhmbiKRZzIChFeqqyOFrKnTjr61hFlyQ23w5O+5awJrl5zGfMOXglJh2DEktw/fadxkZFB4hUgrS09BjGT4gXnZSGkFlAFwWDueVA9WWClqA0WQh6gpXvo2AyR8PEVxM9BYqNJicGhhvgckcjISEBFRUVvsPsVOpUoNIIGZezB1+JzcJTpgz04yI5j5QMded5AFsPzjoW4HQmUJUHgd6EXoYU/HN8LpZvYSSqCUR2AFAvX76MlSsTYTTaER5pUVO4B6hGSr8mQNhiFqBSX1U6K/cpIPXsl+/Nwm6R5C53FBITE58woFZUYkzOPnwxNhd/bcoWUPZ3qjXzCiCdq4eS6yqeNFAr1DKUYEcu+lsSYFy6DrvPXvA9nQ4hAmLr1m0YNGioWOiRBnu93ilgU3pqIwC2gCmJHyaNlVoRBaMA1YWB4Tq4XO4nE6hjs/fjy0MK8ZRRSUjviiNdwU0dn+9p0D1jy8VrsWmYv3Yvbt5Xkah2F58+dPToUYnVR0bqZdr3NZI6lt3CBK3J7MSAgZFwud1ITk5CpeaS6yLqXKBWVWJ87l58LTYPTxlzESoGS+dN6S1hDbTB9lz0sWbiN7PysO7wad9T6RC6ffs2MjIyERUVA73BBKPZ8djS8/E5Sk3/ZpcA1R0VhZSUlCcLqPerKhGXv0sy7p8xcurvfLdT86weFg2oIbYsfNq2UiJRZ65el/F3ZFEJGmnMM42PmyTS1Gy2is+0MZA6ktW0r/RUNfVHx8QgLS3tyQJqRVWlOPlfH56OZ4yZ4lCXeH2dwdSVXA/UUEcenrWl4s2hH6Fof6mEdklagYn2JoL0ypWreP/9hZKqx1CpxWIXy7xzJaoCqgKrCwPCdRg0eDAyMzOfLId/ZXUlZhXtxLdHZuBpY4YAQxJJuhKomvurrtZpAYKsmfiMKwHvLkjByWtXPaPn4sH2Barm6uIyEkaABsUMUtJUUve6FqgGi0tyXgcPGYqcnJwuz7bqVKBWVVdg/urteHtMmrinVKaTluTcNVy/wE+5oxiN6mNOxxvDkrF4/Tbc8iyeE5B2QBVplWd6HOPGTYDFbJPsKOaWmrtIPxWQ0qiyuPBeuA5DY4ehID//yYr119ZUYsn6nfje+HQBKjOdGruGOp+VnswCFHlSWKKfNQW/npqJA2fPe8pIevTTR2QYPQ4xPzQ5ORlmE0FqgclkkxxTWt2NrfKOZmX1K3bh3YGRGDZ8BIqLip8soHKl6MrNe/HD+Gw8ZcqUZBMVIu06q19FvBgd4xLqfDxjysSXBqVicOI63L7PfE2VwifTdDsDlb7JjRs3YvjwEYjUmWEwEqROicnTMd8YSB3NPKaSqJTmlKgjR42WdViNInKdTJ0M1Fqk7TiEn03LlyXMbCAmQO1C95TkskoYt1gMu6cNKfhhfA6StjMSpcbMdD61uPBRGbWtoyPiM30fkZEGyRtVoU0VMWo8LXcG1+uoBOqACD3GTZiAzSUlvkPvdOpkoALZe4/h32YX4SlLGkKZjNIEeDqT1WpUGnTFkrnVz5IE3UfrcfjSFd+ht5m8Yc4cz+SUNLjdgxERafaEST066aOkqVeUqQH7btdqrp/69SYueTFg8pQp2LVrV4Pz6ArqdKAWHzqF38xfjWfMqQh1PN7a+vZk9aAUIsxRiN7mLLw+LB2zivfgXmXHZQvRgt6+fQfGj49DJEEq0lTljDaWcs2xt/Qj+37/uKymfp3JgXCdEdNnzMT+/ft9T6HTqdOBuuV4Gd79cD36mFL8RKIyrl8oIdMgUwp+P6cQqw6qEucdFS5l0glXiNptLskBpXNdEkS0HFINNNQVtWUlde+9QOXRZRuD7XFYHVfTUSONCqhz5s5DaWmp7yl0OnU6UA+cvQzL0hIEm1NkZafUIJXs/cYg6gzmgxJM36krFy/aEzE2awtOeSJRHQFUhknXrVsneZ56nUmSly0aGJli573uyZNyx9Q8yRnVUvDoETA5oDfahI2yPMXZDtO/N1DtiNCb8MGiD6VkUFdTpwO1tOwqohO2oB/L7di7Hqj93XkIdpJz8NaIVOTsLUVlTcdlCh0+fAQT4+Ills+FemarlsSswPgwVsB1wkhXFhf5mawwma0SHCBQ9R7ANZaWLWXN2U+g2qS4xbLly3H1yuPp6zQ+qebQtdVWr0GnA7Xs+g2Mz96Jz7jTEcIVpV3sQyVQ+9qy0d+eifBFxTh6QTXbbeuFbYrOny/D8pWJAgCdiatJ7TBxbb4UkOCyZ8WSzW90SD6qXm+FTmeFPtIKXSSXpJhhsVgRHR2N0WPG4sPFSzB7zjwMHjoKEczON7XF/6p+qzc7EWGwwmxzICkpCTeuazNMy4huNy4KpIpz9uxZKX7R1hUCnQ7U8nt3MHv1XnxpcBqCbVwflYd+7sYA6iymjtrXkoFXo1Lw/ro9uHbHs9a9nYHKpI7Va9Zi2MjRGBBphIFSUCqdcI2+TRz9Bj1XiJoQEWGQ9Up0W5lMVjgcURg6ZDji46bi/QULJUCwYcN6HDlyBJs3b8Ws2fNgdURL7qoG1MbSsmWsLH4XwvVWuKIHIzsnB3fvPLrG1t27d3Hp0iVZCLh9+3Zs27YNBw4cQFlZGe7cudPmEGynA7WipgrLthzGN4enoa81R6bdrgRqEEuc29Pxkwlp2HmmDJV17SHbF6jHjh/D3HnzoTOYEWmwQGe0IFJvQoTOgAi9AXq9AQa9UaQlk5VjY4dhwoSJmDdvPlauTEB+fgG2bd0ua/yvXr1aJ7Uys7IxdNgIROjNbQapmvqjYTBFYWCkBbHDR2PtuvWoqWkMMh6fy6mpv9IrwMBFYSFXr6qVqzt37sSpU6cEwNrs1JZZqpOBqgaat+8k/mlsmrS+6VqgFkq36C8NSsOglatxUyJRnnG24aL60v0HD5Cckgp3dAwGDIgQ/TJSZ4CO4DSaYLFyKo/CqFGjMGPGDCxbtgwFBQUimXizmyp0RrBmZGbC4Y5ChN7oWe/fdjeVyRINozkaAyIsGDthEnbu2i3Ho0TkrEDgsVrg3r17UVxcjOXLl2PevHmYPXs2lixZgg0bNuD8+fMN0gIlUNLG69nJQFVP5uZj5/Ef03IQYs1EUBe6qOiWesaQhH+akIHMPUdQWa2FSNsvAkXJs2vXbgwZOgzvvPMu3n13IPR6E6KiBmHchPGYO38eEpOTxBNAyUQJdfPmTUmra84Qoc6XmZUFZxSnajMMFiuM1vbJXVULCN14L8KMmbPnS/SstqZaHpgtW7YgNTVVHqbBgwfD7XYjPj5eEqsJ3OvXr3dYfdZOBaqWeEwXlWnxaoSxt5NdRYZ8QdQh7DHc1ALCQvS15uN5WyLeW1SE0qtXvZrttl0CaETgcfoePGQIxo4dhw8WLkJaWjo2rN+Iffv24tTpUyId6bYiqB+ly129fg0Z2dkYPDQW4SzxY7bCYLXD4FXm5/HYk1JoVWWAwvUWjJ0Yh4TERGSkp2PatGkYOnQoLBYLXC4Xpk6dKnmq+/btE6PJt0R7e1OXAPXM1XKMz9qK5xx0UeV0agUUFTJlfL9AElC+OSIdkwu24071g3opKoF975E/HlG6nDlzRm5oXn4+tm3fLnX3eWPv3rn76GRknzFQ0mbn5WHYqDEYSNXBaPEYZQ4PUJvyo3pnRGnsu41iuriMFgcMZjuMZhuc7mjJ8Hc4HNDr9YiKisLkyZNFgu7evVsesM7KquoSoF67fRdLNh7A56KSpKlYZyVOq3Q+BVRGxfqak/Df84pQdPCE71AbgeRxiHoawcUpsa2rOG/euoU169YidsRIhOtNiDRaYeJ0b3WoaZ9lKBtN5b5h1oeFW/l7gpT+U6vo0VxpEBmpg81mQ1xcHDIyMiRK1dHSsynqEqDeq6hA4YGT+NaIZIQ5siRC5QuqjmFVv4q+22BbNj7rShTJfv56uRogK/NpAG0jUDUDoj1UCLp3Nm/ZgiGxQ6EzmqAzWj3AogTUVgE0B9RoH/bUBvBlCxO1ueqVVf9MiIg0wG53YPLkKVIMmG4mX19oU/pzR1GXAJU5nnvPXcRPJ6XjWWeWSlZuBKoOYE95oBB7Pvpas/CDManI3H5Eqgx6Bug9WL+g+/fuY1PJJowZNwbheh10JpMASi38exRQfaWqkpzMeWU5Hynpw/146qgSnHqDGdExgzF37lyx4GnhE6D0PBCsdEk9So/uCOpUoKrEYwXW8+W38Mf5efiUS1XtU71GvSujdAA7Vee9UFs2gq1pMC0uxv4zXoUlvFVTPwBqRWUFNm0uwaQpUxBp0CPCYICBAQJO93Ug9QZqU1y/DfVY/s2QLVcR6A1WREQaERFhlOUvI0eNkUYW69ZtwMmTJ0VdodSkl4FWPS1/Gn2dJUW9qZOByhNUQL1x9wFiUzbi8zGZ6GXKFkkncf8OBKoshWabc1sGPhuVgg/W78XV23e8xuc/QKUU27l7NyZPnw6dySwWfkOQ+gKyKeZ2qs6/wWNwGc126Blw0Jlk6Yvd7sbIkWOxYMEHKF61GqdOn0ZVlZKYXHTIghibNm3Cjh07xHjqCmlK6mSg1v2HuxWVWLHlEL4xIgu9uCLVqcpLSpG0DlvrXyDusP6OTPzzxCxsP33R0zvVv4ggPXzkMCZNnQq92YaBehNMNmZHEWxNWfKNLXjN5USvAN1XerqwuHiQYVqdCVZK0OGj8MHCD7Fu7QapOq1Z8AQjpSiXoLCcDx37NAq7kjoRqPWd7El0ru86cwU/istHX3OaZ1mKKjWpSj62v2TlPp9ms93oLESnbMKlW57W5e28xORxSJtO6bJiF5Op06bBYGbtKTr0HUoiCnsy/L2AqhlEdWUm6967JOmFQA03GKWghNFgwahRY6RCH8OcBCSB6X18StEFCxZgypQpEiFj9emupk4EqgJpHVxra3Hxxh28+/5qvOBMQ2+bVtlPRao6QqKyanUfcxreGpWFzH3H65rtdj1M64kgZUjSaDJK0zNKwYb6aNN6KUGp1fJXzSacMBptYiC9Fx4Ji92JuLjJSE1Ok6UlTCBRVnz9uRO0jNcz2jR27FiRpPT5+gN1MlC1NuXq3f2KSoxK34qvShnKbOlsQqC2ay2qusZoyiX1kjMR78zPw+lrNxpEoh5O3nNBxxF9lIsWfSh+y4jICJjMNkkBbAxSb1bf1xXmNTtkNatOZ5aUQFaMjoufjITEZOzYvhOXL11uVJ6noqJSmqclJCRKvkFsbCxyc3NFJ/UX6mSgEqr1N5x/LSs5jO/HFeBpQybCHKs8BX21hrptZG0/8gDko48hGW+OSMS0vI2eZrscyaN8gZ5t6h4xBdr2IO241A2pIxKkDrsLEZSAkhCtVqY2tuDrmWoBwUqAUoISpCxe4XYPwoQJ8VixYiV27d6D65qv2Of4dDft2rUHc+bMhdFoht3uFL2Uvlt/ok4FalNUcuw8/m/BOgSb0qRUersVTpNl2J7+p85iqScVZFiO38/KxrrD2hogTv3kpoGnHikWnqAOVwPaGqqsj1rr/3igbfxwsPPJkiVLYbM6Pc0fbKq2Pqdv0TfppKcflGBVOqfGtOLZT8po8CRVmx0YN3YiUlPScfToMXFxNTfCixcvSUOJwazFGmnEgAE6TJ06UyT7wx/ezqcuByp7Ng1N3oaXnGzRQ4DVN9dtBL5WMNfoU6KyZgD/7mXLwStRiRiRtgllNzTp4g06XyJMq5WyUlur1ATxAzfcVvoztfimNgY3dcX09Ay4nNHQ69hWxwarmV34VNa/VJnWIkqaVBVXk13CqOziFxlhlPY+U6ZMRUF+IU6ePI3bt+80m0tw//4DqRzIBYZud4yAnB1SrBYnli1LwM2b3mmFLT23jqUuBypL5ixadwDfHpmJp83Z6Oegfqq6kfiCrzWsdVKRv50F6GVOxz9PTEfClv2ortV0NI/EbPJmNCcta3H/wW2U37yCG7euS1JxS7VXJaXqt6VEYz3UIUNiBaQEDCWpRetYIhKV0lTliBKoepNN8k+ZlELX1aDBqu1OTnauZNeXNzHFa1RVVYmzZ84gOzsXEydOhtXqFEnKrijhA/SIHToShYWrvHylzV2DzqcuByppzaFT+O0cgolFKShJqVO2UaIKWFXOKbtNh1hXwvxRMXafUisqG6T0PeJmUJ+9ff8Bym7cwu4z51C4bT3WbVuDU2dLPUB9NPnG/a9dK0dWVo50gx44UCcA1drp1LEYR1x9GgW9wYUIrp/i9G6zY+iw4Zgxey4ys3Kwf98B3LzRvJ+T53q9vBx79uyWpOyo6CGIiDBJTQHqs+QB7+kwdcpM7Nm9z+uXAaA2oNJLVxGbXoL+9kSE2Fm1pG3SVDGbV7AOfxFC7bn4QsxSLFq/G+UeI6G6lnpi0/eCN5Z+XvbFunrrBvafLUPWnuOYUrQL4Yuy8M6EiZi1cpEAtaXTvjdIacDk5OZj6NDhsj6KEo0Ndznd17MCroltdfRO6HW05u1S23/W7LnILyjE8RMnUelxsdUfp8Fb+f58WRkKCgsRx9WvlMbhJugNDk89AS69tiMy0oQVyxNxoeyi16+buDhdRH4B1Fv372H51oP4m6ErEWrPRjAt9TY6/MNczHPNR19bAULtWfjZlBRsO6mtT6d08wDVh6pqa3C2/Ka0W1+xaTPGp+bgD/My8ObYDLwYnYwQw4f4TfxS5G3bCdQ2rQM+jAjSvLx8REcPFuNHgdQboB6QmlUTtIEDjdBHWjBk0Ah88AHj8Btx9uw58YE2zAVtDKoHDyqwZ+8+zF3wviyD4coCWWZNF5ZWiM3klB6pUVFDsG7d+janI3YU+QFQ1QXedboMv5udjudcKejLHNU2AlVrDcR1WS9GpSA2bT3OXr/he3Ahtlo/cPYicnYfw9T8XTAuW49fzcrHd8em4BtDVuAz7lT0tmbjaVMqvhqzDHOKd+GCd6vJFkodhiG58C02doTkeho8VjqZhgyZFj+/GzCQa6vMGDt2ApYvS0BJyRYBKJNCGicrNwbp+fPnkJuXh7j4SbDanNJhmg8Gk09UB0BlpOmNbJvuwPRps3D0yNEG+/An8hOgAhdv3MKk3I34/KAV6G1LF92yEfhaw85ChNiLEGpLw9tjk7D64Km6G8wS7WU3bmP3mUvI23cCc1bvhm35OvxqRhG+NSIbL0elI8yeir7mVASZ0tHLwnZDWXjOngTb0lU4UKbW/jc8h4eDlcnGTJtjk1xa2ASpGE4eoFKy0rDR6YywO5yybIXNdDdu3CQAbSpZ2VfvJdH/yeUh1EWHDRsuK1t1kQYJnarjecpaSl5qNHR66sUupKdmSnl2f6UuB6pmyLCr35rDJ/D2mJUItqUiuI16aphrFXrZCvGpqDT834IMnLpyHeV376P00nUUHTyFGcV7ELlkPX4Un42vDUnC846VEl7tbcpGX0sugmysnsJEmSIEO3LwnCMB3x+XgDWHjuN+pWd61OqliuvK66R8iNPptm1bJQmZYNTraN3X9yFVbIXN6sCIESPF8V9SUiLhy5ZmK1XX1Ejv1A0bN2HylGmwWGyIiGBs3wyL9kB4vAlam3S9UXWcjokeij2796LigX9O+6QuB6q3RXPp9h28uyAHL7tTJEe1LZZ/SFQunrGm48vD02FMXI3UXYcxLnszfjM3F98amYKX7MnoZ81GCNur29liPVdSAJ9jownmrLrzERxVgCB3PkLMS/GdEUswPXctbj+gZKtBrWS3a+fgc05eRD2R64vGjx8Hk9HkkWxOGA0KoHRJUSel9b906TLs2bMXt261LueTaXmlx05g6bIEuFwxMBi5lITlftgLQEWt6vqfSqhVub50eouoAtOnTX+oW8sfyD+AKhn2NaioqsKCVbvx/0Zk4ClDKkLdhXXtz7XGvb6AbI5pTIU5cvFSdA5eG52Fb45Kw6uDMvGCMwdhdrZXV82C+7H0Jf8muD3H4990bXE/fSzZ+Jz9I5g/SMXJi2dQ45GiPi7ROvKejhlD37t3n9TnN7GMj0hTCyIjLIgIV1P/2DETkJyUJjWpmKXkG4d/FDE0Wly8BnGTpsHsWUEqa/z5MEianzd7ElhYeM3iRHi4Dm53lOiyTakW/kRdD1S527SeVarZ9hNl+O/ZRQg106jyOP49nUtatwgwD8+68vGsFLfIQR9rBnpbsmWJdLBd5b6qzoGKBdzuAsUC1DyEOPLQx5CCn8RnYeXmPUDto+snaSBlVGjv3v2YPXueVO1j4YmBAyIFqG7XEEyKn4bExBRs374Tly5dbsJAejjdv3cPRw4fwcqVSRgxchz0Us+Uq1IJxvqlKJK/KlzfXtJkipLu0fQCMFOKVVy0XgX+Sn4CVCVR+deNu/cxNnM7vjYkQ0WqJBSq2vyEtlZv9VRgoWEW5i5GmJu/9wa7ktYisb3aTbKFDxcA9rVn4pWYJIzM2oGT15p3qPsS9UpGiebPXyj+SQLUYDAhOmoQJsVPRWJCKrZt24Erl1tfJY/Bh8tXrmDLlq2YP28BbFYXBtJ5b2DBtSgYyY3WTTVksykKEeEmcZGxjhUz+f2d/ACoWmZSfXwoZ89x/HJmAZ4yJtVV+1NSrjUStSH3r3N3ebW0lIdASWyVCKOCDZLEYi/Ac/Zk/OGDPKw/ftYzsmbmey+iJD1x4jjmzV8grXje/XO4ZCRNjItDcnIK9u3b3ygzSfIFmiFvXVX2ffIk0tIzZPlI+ECDNPalL1QDqFqf3xic9Wv3CVQnIsL1mDJlGvbs2dPgeP5KfgBUpdNVkz2JdCevlmNYZglecC6V0pTsniJxe8mIagzCx+f6HlM0nhQXoI+DK1Wz8PaIJGTsPYSbD5TEUYBqDFQNTJy+T58+jenTp0vRM7PJIpZ+Tm6e5HvSSGp6ibHve0Xe29F/yrVLLKfjcLIIsAUmoxMmkzbFNwZnk2x2Sa6q2WxDUlKy1BzwPZY/kh8AlaTi7VrGJw2W3L3H8NP4NISZs9DXodxEagWAAhaBxrY/bW/9o3RftU/12tuShlcHJ2N4xiac94qhPywnQFtCwuz8IUOGYNasmbIeXhlJNxqFOn1JAaXx/mlcsbxkYmICRo8eJQXVdIwwGRi9ioLJUyG68XopD3t0VC2nVc9K0hFGqRTIImzdhfwEqCRPcojnXtHvOTq9BJ+206jKQ4i7qA5Q3kCV5OhG4GsFexqyCXPxn0WtAvj9vGxskTKUyo8p1nzDAdcRwcRSPWzFyLVG6enpOHToIG7dutliSaVCug1VgKtXr2HTxk2YP38+otxRiIyMrKvcV782ShWUaARQL5BqzAK9OoMNRqNFyvJcvOi1VNzPyY+A2pAeVFVi9eHTeGtUGsIcGQhyetrseIGs3RKsPZKZKkaQMRk/nJiOJZt24X5tlfKX1qjSGSyk0hQxNMrCtUVFRTh8+HCjiiIto/pkbAL/woVLyMrKxsiRY8StxYRqlkJXmf317XoaTe1eXG/tq+10RgcMBhuGDxuBfXv3otrPLX1v8kugalLo8q07iF65Dl+ITkZvM5v8FjaY7iWFr42hVtU+SEnm3tZcfDEmEaPSN+HCDS0vQIFUFq40PTuLccRkE9YObSvduXNXylTOnDUHNrvSRRkckHLpslSa3BiUTbOK57OBBBOwGYWyWt1YsSKhTjftLuSXQNVCPhVV1SgpPY1fxGcjzJwi1aHr11J5jKA2eAIEqIw8MR3Qni/S9M/vF2LDEa19jyKRpjKuBh/XEQ2k1vpBmyIWf0hJTcOokWOkDbp0OxGDSXVGUVKyFYYTWfRYt6QIMhJFCU3Drrnsf38l/wRqnXFdI/1Ix6RtxmtDMvCUMRPBPtn/jz/1awAvQJCjAEE2WvnJSNh8ELfu1UdpNCHaQlXzsYjSeOv2bViwcCFiBg0RY4ksoU+tI4oGVGsTYHwYc+m0xSmle6KiByExMalb+E19yT+BWocMhY61h0/jv+cUI9iYjCA6/wkyiVZ5+URbwFrLdQVuj+/UWSCpgC9HpyA2ZS1OX9Vi3urY8n8zU35bickqzIwqLF6N8fFx0BvNGBihh0Ha8jgkBKolkGiNzwjUlkhUGltmMsOoRqtU6JsxY6Z4ELoj+TFQ69+WP7iH6UW78EYsE0nSJNdUpn0NrC1cWk2gqsCBqupHtYG5ry84k/CvU1Kx4+x5VNY1VtCWU7cvUf+mmnDv7l0xaBYv+RiuqMF4LyJStfTR6p16Wumo7nyKG1jyTVn3nsop9SB1wyLOfQOGDokVd1lrcwn8hfwTqN7SzAOYHafPw750NT5jWYpQZ5aATUWSGnoCHsZKp1UG1PMOLlMpxjOWVLw1PgXz12/F7UptSmScrGXpda2lmppalJVdRFZmDsaNmwiz1QGdQVWOZsmehpX6Hm7Va6wAWl8L1Uw2R8NkdMNs4BJsExYtWowTJ076DqfbkB8DVYVWtZqq96sqkLf3GL43OglBtnQE2bPwLJebeBJWfEHZHKuK05SoxXjanIvPxqTAkrAGx65dqXO6yzE7QCmld2DHzt1YtOhjDIkZLtZ8pN4MnclTpU8aRrQOpAJUYa+ivQQpAwF6B3SRFgwbNkpWCPjrMpOWkB8DtfH6UC7/GJOxGa9GpyHYQhVArYtqKVBVqqCa+oMdBejP0uhzC5C3/5jKNajR1lIRqE2HSx+HmKTCphP0s06dNhNWazQiBlqg19lUQd7HlKQNgVr/XmsAzDVXDJWmpKRJhlZ3Jj8FqiJNVdWkalVNNfafu4jfzcjFi8409LWxjXrLQEp+1kFvQaEYZEHWDPzD8EQsW78Hdzz9pVh5moJUSXK6b9rucqJvldXxPv74YwwaPFiKlkVEWmE0UYeMVhGmBvWltHBnY0A2x1Lhr04aO6S/Kg0ognTixIk4ffpUnW+6AyaKTiG/Bmo91UP2QeU9LN64B/8wLhO9jexQzWwnNf1rElOFVglO70wp5goUItRZhL62XHzKloBRKetx8pL3OiHvu/h4d9Q7ZMoY/8YNGzF2zFiYTXQ5GaSAhG9EqVHos7XsqSZt4OpST+He8EiDLMdm/6rHi5T5F3UToHoAQK6pxrnycsQkb8IXYlLRy5SFMC+rXwurNjKwRD0oQG9bHvrZM/Hz+DRsOnEalY+x5PlRRGf6oUNHsGzZSulhyjVLrO4sS0TodmpCKrad2SOK0Ss7wiP0cLqisGz5CtzwTqrpruK0OwGVAk4SQzy646qjZ/DHD9YgzJyMYGsBwmRaV1Z9qFsZTL5TP7uv9DWl443hGZi3Zheu3ddCnu1zAzk+JjWvWbMGM2fOhdM5COHhRhh0bMqrLQ1pQiK2kcV9JdO+XVqrc2n0nDnz5WHxHlt3pm4HVC0V8FZlBZZtO4LvjstEsJnNI9R0T6s+1E0/q08gwO1Z/+RKQcSiYpy6Vl5/8x6SuNxSunP3LkqPHUNGZhaGDR+JCGb2DzTKmnlWO2HBM0q+DgMqp30Tm0cYJEy6Yf2mutTC7g5SUvcBqueCq6p66sKfKb+J+PxteCU6EaHWRIQ50mV9VJjbO2KljK0QVy6CLMn4+dQcpGw/4CVF6yL5raD6G0/n/bXr16R7yaw5c6T47sBwvcTVWTZSKkB7x+pbGwJ9BIu1T6BSvTBaYLXapaYVUwR7EnUroAoJRjwWLGpRevk6jEuL8GrUEvQ1L0cogUoXlGehnlQGdBSglyUNrw1PQlzBVly8Q73N20/7eBKHID1ytBQfL1uGocOHw2Dy1NxnUwetbI5WV7/d2CsSRdBLiJXJ0HopxPvBB4ukSkpPo+4HVB+qqK7GluOn8T+zc/GCPQHPmDPE+q+L57NiiiMPz9uWwbZiDXacLvPoEar2afPp0A+na1evYf36DZg+czYc7mhEGNj2kY0haHVr7iZfkLWdVQMJGk7KyW+2uqGLZL0AtaKUsfzuGiZ9GHV7oBJ01TWVWFZyCD+dlItgU5IAU1taEmTLRag9HT+MS0bevlI8qKqvcvI4MGUR3NKjx5CeloVxY+NELxxA36iEQR3SZqceqJpe2hhwj8+qsQSlNIFqMDL6ZMTYMeOk3U5PBCmpmwOVMFP65eXbtzGraAfeHJ6CIGu6KijhLEBfSzq+GJOESfkluHRLVVKW6FMrQUr9mAvstm/fjTmzFsBhi5EiEnq6nBinl4a39GN6Xj1JJe3NMtWbFBtMbkREmjFk8DBkZWZLG8ieSt0cqIq0tUanLl9BXFYJXnEtQ19HhvSUesmZhv+dnYMjl6+h2tPztK5GtGeJVksAe+nSRWRn52DwkBFSr9SgU8XF1DTsHaNvfQi0NUxpapFqJw7o9KocEFvyXLqoQqTtkcDtj9QDgFrLCmGev2twqOwSrMtW4QXnSjwdsQQ/mpiBpO0HcV8y2pX5pP1M4gc+QPV15dy+cxtbtmyRJrYud5Ss4tQb1DJlyZyXWL2H64DaGGCPy/VxfE8vKSlNySonZhhNNny05GOcPnW62fH3FOoZQK2pQbVn5V1ldQU2HT+H38/Oxo9HL8XY1LU4L+0RFZjrJnyPKG1OolLXIwCyM7MxcUKcFNYNj9BBz+UhItm8Cz74cmPAPTbXubMIUiVJudzZanVg9py5KC091q0W6T0u9Qyg1tZIAYsaLm2urUYVapC1/QCWrSrB9iNs1ePpaNIUIn2IUyeXhrCiyccfLUeUa5BUFYmMNHqMpHYG4sO4wSI+pZcybc9ksmHq1OlS+a9+qm/ByXVj6iFAVVqnarNDPbQa1TUVeFBxDxWVKiFD5Qo0vp8qLKs+5Ov5sgvSGSQubioidRZERLB8uap331EGUnPMYmbMK1UNJ1RlaLqiJk2aIrWnvMfdU6d8jXoAULXpXP2v7HlN89S+UVt5o9T35j6oeICdu3Zj/oKFiIoeLJElnZ41TKkTctptQuJ1IFMvlZ6mJkadVJ398IFGKbK2deu2HpER1RrqIUBV/9e7nB4mXRoClH+fOXcO2bm50jPU7nAjUmcSaertChLDqT1S8ppjLQ/AS9dlCJaL8yJ1Zmnbw5aRbGTmW2TtSaAeBNRm6CFfsmgZu4YsXb4Sg2OHSzdnlsxhzqjmVFdlc+od940A1i7scd57wKqWOBOoDiloxsrUY8dNkHr+3kUuevp07009AqitperqGlwvv4HVa9YhLn6qJHSE6xj+tMLI/qLiaupEo8lrvZPmipLy6Ub2OLVh/Ph4rFnDBOjuu+aprfTEAZXrl06ePIXFiz+GO2qQ6KJ6dmVmQrOVi+w6EqgEZNPMZSl8lfVOUuNfNSmLj5+KkpKtdaFRX936SaEnCqg3ym9i/bqNmDJlhtRg0utZmMEGI7uFcK2RxQazhZXyVJ2nxkBrJ9YKSnixVEPh1E8/aaRZeqNOmTwNO3bs7JaVTdqbngig0kI+WnpUWoOPHjVeYvR//rMOAwaYEB5uRqSOi+1sUu9JAbY9geodBPD8LTF7ZvzXZ+fzmFyqwm7RNpsLM2fOxs6du3DvXtsLr/UE6tFApTP8ypUr2Lp1K2bPng2L2YZ3/xyByEgmGEcjOmoYBg8aCZdrMAwGqxgt0tqmWaA29dnDuN6CV1wfZpXkFU+WFdc5sUtfpE4Pp9Mt7cn37T+A6rqqLU+W4dQU9RigarqbN7NMeWpqqlSA/tOf/oTwgRFwOaMlPW/e3A+QlZmL4qI1+PijFYhyD5bpVsCqgUmzyOsK5bbF4U8JynpSCqB6q6qMYiKbrFKk12F3YMmSJTh27Jjv6T3x1COASlBqoUT+zY53hYWFmDJlCqKiojBo0CDMnDkTSUlJ0pj2wIGDOH/uPO7euSvG1cWLl5GbW4ghg4ZBF8E2j2bRU8WXKQaO1mmkNRKVlaC9mJ9JNr5DJKhWdCJSb0REpE7GmJmZKYUqnnTp2RT1CKCSeHPpYzx58qQ0xl2+fDmWLl0qZcrZpIFSitVC6DtlaRtWkvYmrjFat3Y9JsVPkcrOA1jhmQ53schVGJMOeE3KNp7WGwJVrHeC3FNnX/1eZT+ZmGBttWNApF4q+LGePleuXrp0KQDSZqhHAZXJJFyKQWBSLyU42Q3vYUVrvYFx9949CU/OnbcATlcMdDorDEzpM9Jl5A1UX5A2B1SVClgPUgVULmkO1xlgd7oxa/ZcbC7Z8kRGm1pDPQKo2tRPNw6z3FsTB5dcFQFrvepw7NhxLFu+EjExsQJUvd7hqfzsmyDdfKK0Kv2olkkLe3qQUgdm/ym7w4WPPvoYpaXM7vIeT0CiNkU9AqgdQZTOjAaNHj0BegPXy7NlDoua0SCyy8pPTuHqfcO6pUoXdcEiXA9Qrm1iB7/hw4ejqKi4xy1p7kgKAPUhxOl4z559+PDDjxAVPQThEUaE603Qm6wwSARLrY/ScgHqpCkL6ApTbVAAZTHdKHcMFr6/ULpN9+T1TR1BAaA+gqSH1MmTyMrOxfiJkyS8OkBnQLjBCL3FpvygXqXLyWJ8GZ3i7mLbHbPJhgnj45CZmYUTx4/32JWiHUkBoDZLDWPqN2/dQsnmLZg9733EDImFwcxiE5SuDMEqsKoEZzeMeoJUBRAGDRqKOXPmYeOmTdKPqm7vAV20VRQAarOkDCzvRdUE17nzZcgvKMTkKVNhtTkkd1XPBGsTdVG31JnSR9pht0YhPm4KcnJycf78+R67OrSzKADUhxJB2nD9PwFH3ZWuL4Jw4sR4WRX65z9F4E/vhAtoJ4yfgsy0bBw5fERqATCo0HCfAWotBYD6mETwXb16Fbt370FKchqmTpkpKXkrViRi5849uHzpCqoaNeoNgPRx6YkCakv0Qm7Tku28iUGF/fsPSmvIC2UXUFXVMR1VnmTyS6ASKAxzcorl1Kkx39+/f7+BvucLKg1odP5rv2EAQPvcd3tf4r61bRjR4u/ZN5TSk4BkmJbSlN/xb7qZeKyG07vyFrCvKcfAMXsfVxuH9zlq+/UmbsP98DttG99z53uen7YfCQ/7nKM2Vo6f53Ht2jUx7LTr0h3IL4HKi84Q6Jw5czBjxgzh6dOnY968eZK4cfbs2bqb6nuh+Z7AYgLK1KlTJb2voKCg1S4h3vCDBw9KhRSr1Yr33nsPdrtdsptoHJGZmTVixAgZ54EDrLmqiGOgr/TDDz+UMbA9OkHkTQQPQ71scc7kGTajYEKKL3G//G7SpEn46KOPUFbGaoT1xPPauHFj3bVil2vvRGsC+dChQzJut9uNd999VzK1xo4dK11aCNruQH4J1AsXLmDy5Mn4yle+gs997nN48cUX8fzzz+OFF17Al770Jfz2t78VIDbVIZk3iTfg7bfflt98/vOfxy9/+UtJ+Wsp8fgffPABfvSjH8nxg4OD0atXL4SGhuIb3/iGAH/Pnj1wOp349Kc/jTfffBMrVqyo00H5EPGh+u53v4tXXnlFQE5ga0QgE3B6vV72/9JLL+HrX/86EhISGriwSEys+elPfyrn/uqrr2LcuHE4dUo1FeZ++ADws9deew1f/epXBfTMwSVRgnJcP/vZz+Q6hISE4JlnnkHv3r3x7LPP4lvf+pacAx+G1j7InU1+CVRKzMGDB+Mv/uIv8IlPfALPPfccvva1r8nF/su//Es89dRT+OEPfyhSwneZBjOQmH/69NNPy2/JBGxaWlqLEj8oYd5//30BH3/LMRAkPDZfua/ExESpR0UAcht+vmjRogb7oQR8+eWX5fuf//zndeAiUZrm5eUJULQxki0Wi0g/b6Kk5Llr2/zt3/6tSHkN0FQ9HA6HPEif/OQn5dwJVAKP5/yP//iPdb/lA//Nb35T9sft+RkfkjFjxjT50PsT+SVQKX04pfLJJzD/93//V27YtGnT8Otf/xp9+/atAwAB463b7dq1S24OgaoBnfvhtN0SqZqbmysSTPsdpRFvPoGnJWCzJc7mzZsREREh21EqEqgcBwHCV075lP4Ez3/913/hzJkzdcfgA8P8UwKHv/+rv/oref3e976HrKysBuPhQ0NweQOaD2lKSooch7on9xUWFoagoCCMGjVKJOnevXtlrNr+v//972PkyJGS/rhw4UJRATg7UBK7XC6/VwH8FqhM3NCkBNUA7ULu3LkTP/nJTwSEn/nMZwTQmlQlAKjH8aYRqJ/97GdFYlACv/XWWygpKfE5UkMdl/uJjo4WCfnXf/3X+MEPfiB5ot4rQCnxCAQ+ILzZBAKlLGcA7p+fU/ekXsvx8dj/+Z//2QCozJklKDlGTsFf/vKXBUycOdjAzDsPYMGCBXVA1QDNfVKd2b9/v0z9Q4cOrQMqpSMNJqoMVJ24PaUwVQDvFpOHDx8W0PIB49SvfacZev5G3QKo1ME0I4IW9IQJE0SK8cb9+7//e920xQtuMBgExPyeU+mAAQPkxvbp00ekMkHWHFE3/d3vfic3l2ClVPSVNFpuKx8YTWIR1NQfv/Od7whTP+bx+TmlsrdEJQgpDQlKjus3v/mNGDYELPfF2WP79u11xyNQX3/9dfmO0u9v/uZv5Fz69euHgQMHSv4tH1aOl7r0+PHjJRjBa0SdlNeI14TAJHEcfJi54oH6LJkGJw2+ixcv1h3X36hbAJVSgnqrRosXL5YbxptHqaeBiToZgcLP/+3f/k2kIfVJSlV+RtDSCCLRNcN9Mh+U+iOXr/D1X//1X2VbSuPk5GR5MJoiqhgaUKmeUKoSrF/84hfxhS98QYDE73yBymOYzWY5Lx6DIGELyh//+Meyn29/+9tyfhpx6qdEJOh5TqNHj5ZtuW8acgTpO++8g0996lMCVAKUUp/Xj4YTj0N1gCCkpKRu/MYbb4jOTeBTWvM9ZwBKaH+lbgFUSgntaecURQlEQ4XSgtMqp3zqagQ0p0BK1F/84hcy/VGvJSB4YynpCD4SAcNplpY3dTxOg9Rh/+d//qduOqfK4WuFa+QtUQmQX/3qVxg2bJgAJzY2VvRcegkIFgJVe9C4TIZg5BgJbG6fnZ2Nf/mXfxEJy/ETNFrpHnofCCheB0r7HTt2iEtLm9ZpGNFjwGmfx+O1On78eJ1EJcA5s1DdIK1fv17Gxt9we+5Dk+TUa/2VugVQCUCCiCClf5I3lSAlWClh6CukpPz9739fd+EpbThl8kZSqvGz/v37i3ShVcz90Cih5KNbh+CgVCXY+FveYEou6ptaoIGg5bRKEHF61nRUPgiUfJohxXHS+KJ05fj5MFF14e+oTmjGIF9pcFGqUSJqOihnCc0vSx2SEpXfUS/ltaFng+MkOLXzJRPkvFY8D/peNTD//d//PTIyMmQWoepDsHO/dL/xez4gfGBaYmx2Ffk9UDkdcsqmMUDpQktfc63wbzq4SfzO2+ggCMjU5zSgkqkT0uCh4URHOdUFWvoELqdG/q1NrQQrPQgEBXVFPhSUalzhSsOJjnMNqHTua8T9UPfzBirBw6mV07Q2FkpbbYx85fH4OSUtj8cHkGoAJSrPiWqJtnSF0/sf//jHBm44ApUPIh8oqiba7EAmKCmJ9+3bJ8EUrs7lcfgd9Wn6nr2NLX8jvwSq5kclSHkhOUVRp6KuyRvGzyl1li1bJheXEvIPf/iDfE5g/Md//IcAl/opp3QteMB9UYJRqlHyUcJ4h1lJXIJC6cjpmdtznzR0aMHTYCEz2ED3lCZRaRgRWBoRYJx6NT8qJSHPiVKOx+dnlPSUYhwjz4MGDgFN0HobiXQlaWOnt0MzirSIFN1OmiTmA0kPAK8HjT4abfR2UM3gQ8Bz4CxDt5RmvPEzqiqU0v5MfglU6qMEE28mIzsEKAHCV15kSiWCRTOiKKkYreI2jAbx5mshS0o3SmibzSY3nLoZb6ZvoMCbGMqkJCNYKBW1iA5fGQhYtWqVHDMmJkbA+Hd/93dYuXJlnVuHQCXAKI1pWJlMJlEZaGnTCKQko+9Sc+5zez5wBCz1R/pX6b/lb3gu/JtSmzOLpmuS+HDxgeQMwHOnikCdXItM8ZV6OnVkPiBUFfggUwpTB+e14sxFz4G/58v6JVAJMir9lEp0UnPKJfM9dSuCRHMTUbLwhtP1ROBwetNulEaUnpQ+cXFxAlJK2UdFqQgCOvbZDY9WOkFCwNFKpyFGCUQjiNKI4NBUBxJfqZIw9k4gsLYAJSpdQNye50KJ7PuwaK4jngdVB4KSUzjPicEGgtY3gsSHlZ9zv3Tjccze50YA0vvBWYVGFWcBBiq4PXMVvEO7/kx+CdTWkm/WkS/5OrB585qTIE05vPngUMekWvAw8v2dN/E778ws7899P9M+f1xqap98z/PgbMUH2feaeW/v/Xvtb9/9dTb5JVA5DWqpfS0lWuVNpbhpxM/pbKe0aQ6kzZFWL6Cpm8tjEsDN+VubI3oAyA9LBuF+eQ18C2g0BXhv4nfamH1/21LQ8Xc8NvfTHIg7kzoFqAzpcerldMkpkK4XOrmbI05vnEq9IzSPIk6bdK80BxheXE7HdM08SjL6EsfK33Jc3A/9lDyfDRs2iBXNHqS+6XfexBvOY3oDnWMle5c69yV6FjheTu8EDlUe+mH5+rDfkXit6SFo7no8ivgAUUdmtM4fqFOAygtLJ31+fr7oRdQzqbfxYnMq4k3mjeTTywtDvYzbUV8jKLQbTSNHiyJx+uJ76nH8mzeUvlR+RuZnZOpg/A2BTAPMO1RInyLBou2TDxTfc1uCg9KX7zXvAfdFsNE9xfxYWvp063CcDABwjHwQKcnI3N+JEycEcAQzdWkeh9vQRcbxcvwcDz/nMTl2Hp+vdMlRD+ZxeW34nv5Z5uRyzNr58wHi8Xjt+Dn3xweIx9UeCDKvB685r7d2zXmO/Ju/5fXgvjg+7pc+ZI6R33O/fOVxuJ12TbkPX6ndEdThQKVRwhNmKhqVfRpH9PURrLxxvPi0drkNAc2cTAKDVjcjR8zrpOFBI4HuHbqOeKMIOFq0/J5hQT4ElHA0wrgdt2feKLehBc6IFF+5LaUNp0+Ch2AjM2uJ29OK5tgIRj4wHAfHzM8IAAKVDxHHxm25DwKV/ljug9sRhBwzj8Xj09CjF4Pf0WXEh5Tb8rccNx8g/s1jcl8cD7ejb5bnSYAQUPycxh1/z3Pl2Hj+lLIEJa8bx8RzJcC5b+6Tn/G3fM/oE68PHzxecz5gfM/fcgzFxcUyZvqTydyPdu3o2eBvuB3vAz/jrNcZxTQ6HKiUFDx53igClJETWsm8abxYlLSUErzo/IwXjReXF4g3gZ/zQvNmMw+T39Py5nveSF5Ufs6/mZ+qXUAChfun5c2bz9dZs2bJvjkmShZuy8+5fx6Lxyfz9/yOf/M7jpcPFCUbpQeByvPhjaMKwG35npY6gcSx8Fg8Ph8YAksbN8fCm8198Dg8PsdNCcj3/J32SnARLBpQeRzug/vj59yG589x8m96BxiB4u94TXjtNDBzG27L82EAg14AHpef80HkDKGdLz8ngCk0OD7+nkDmK4/D8+O58zu66ny9LB1BHQ5UXmTeLEpBPtGcKiklKIH4Ny8ubx6lAqUE/6Y04ba8GZRylEyUOhqgNAnAz/l086Lxqed77psXnMf0vmncL8FGkGg6H6UaLzxBT1ARADwe98HfEtQEDUFIYGnWMsfKffKGEqj8HcfM/XN7Hpvj55h4ntye++U++NBy2uRnPA7BwBmFMwG35XgJRp4jf89rwgeLUz+PoYGGY+P2dD3xOmmSm4Djg8Wx8Rw4Nl57bsPrzVdux/3zt7x+3CfHzu84bo6RagWPwf1wHHzwuS/+reVQEPDc3jfDrCOow4HKaUEzdHijqbdRB6KiThBTB6JxRR1JM6LINAT4OzIlGXVVfs4pjmuZtO+5Dxo7ZF5c7pvSgNvzGJy+td/Qsc19aQYGf89wIm8CIz78DX+v6a0cE3VfgpHfaxYwt+GUR+a21EP5yjHxeDxPqgn8Dd9zX/ye++fxKc25DzI/ozTl+Lkfjt37HDX9lA+WZtRx+ua21CM5Rp43z4Ogoq+ZrzwnHlfbTtNpuT/+nvvXXFV8z7Fq15rXlNeIY+a94XXUssuorhGcnD2oynGsj/JJtwd1OFBbQl3h7ugo6qpzIZAoyTnzEMzNZX01Ry0dNx8agpdSmjMSwd1ad9/jkF8ANUBtJ0pcgpPT8MN8s20hgpmgJFg1r0hngJQUAGoPIg1IHUWa1O3o4zRFAaAGqFtQAKgB6hYUAGqAugUFgBqgbkEBoAaoW1AAqAHqFhQAaoC6BQWAGqBuQQGgBqhbUACoAeoWFABqgLoFBYAaoG5B/x8duIz9oPm3xgAAAABJRU5ErkJgglBLAwQUAAYACAAAACEArI4TDd8AAADWAQAAIwAAAHhsL3dvcmtzaGVldHMvX3JlbHMvc2hlZXQxLnhtbC5yZWxzrJHBTsMwDIbvSLxD5DtxuwNCaOkuE9KuYzxASN02onGiOBvs7Qnisk6TuHC0//jzZ2W9+QqzOlEWH9lAqxtQxC72nkcDb4eXhydQUiz3do5MBs4ksOnu79Z7mm2pQzL5JKpSWAxMpaRnRHETBSs6JuKaDDEHW2qZR0zWfdiRcNU0j5gvGdAtmGrXG8i7fgXqcE5189/sOAze0Ta6YyAuN1bgKczbbD/rcZVq80jFgNbY//bkIm91fQt426n9T6eUPRfKr1RK9ZKF2FWGV3Wr3z3/SOLiN7pvAAAA//8DAFBLAwQUAAYACAAAACEALyzzyL4AAAAkAQAAJgAAAHhsL2RyYXdpbmdzL19yZWxzL3ZtbERyYXdpbmcxLnZtbC5yZWxzhI9BagMxDEX3hd7BaF9rpotQyniyKYFsS3IAYWs8pmPZ2E5Ibl9DNw0UutT//PfQtL/FTV251JDEwKgHUCw2uSDewPl0eHkDVRuJoy0JG7hzhf38/DR98katj+oaclWdItXA2lp+R6x25UhVp8zSmyWVSK2fxWMm+0We8XUYdlh+M2B+YKqjM1CObgR1uudu/p+dliVY/kj2ElnaHwoMsbs7kIrnZkBrjOwC/eSjzuIB5wkffpu/AQAA//8DAFBLAwQUAAYACAAAACEAJlcPAR8BAACsBgAAJwAAAHhsL3ByaW50ZXJTZXR0aW5ncy9wcmludGVyU2V0dGluZ3MxLmJpbnJjcGNQYPBmMGUwBsICIDuNIZ+hCEg7AnmpQHYxQwBYpIRBlyEMKO4MVGvKYM5gxgACjCzMbHcYLrAy/29gZ2TgZJjFbcKRwsDIwM8QwcQEpCOYmIGkI4MJWDV1CEaoMSAahv8DAbrpLp5+oUoMBow9zC5MZVM3nsRnOxdUkgXJTCo6edSoIRACsHRFjFMNgIqDfUO8QGoFGBRI0Toi04ILEwODW0CEGwMDRyYy+48QJDj+1yMHCzw4GYEsRma00AUaBc6lJhyzuOG6wIIQmdHMhggBRkf0kpeZgRUoDSqbwaHIyMSQwsDEaKlnCtfECCqyEUUrRDwFJs0CZ4HVsOgxkAeBdjByIkUVI8MJBmB0T0ONPaAiuAAAAAD//wMAUEsDBBQABgAIAAAAIQBzc/aKlgAAAKoAAAAQAAAAeGwvY2FsY0NoYWluLnhtbDyOwQoCIRRF90H/IG/f6BREhDqLoB+oPkCc1yjoc/BJ1N9nmzYXDhfOvXp65yReWDkWMjAOCgSSL3OkxcDjft2dQHBzNLtUCA18kGGy2432LvlLcJFENxAbCK2tZynZB8yOh7Ii9eZZanatY10krxXdzAGx5ST3Sh1l7gKw2otq4DYeQMR+AkT6pbRa/lfsFwAA//8DAFBLAwQUAAYACAAAACEA9L6kwEQBAABnAgAAEQAIAWRvY1Byb3BzL2NvcmUueG1sIKIEASigAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjJJRS8MwFIXfBf9DyXubtptjhrYDHcMHB4ITxbeQ3HXBJg1JZrd/b9putWM++Jh7Tr6cc0m2OMgq+AZjRa1ylEQxCkCxmgtV5uhtswrnKLCOKk6rWkGOjmDRori9yZgmrDbwYmoNxgmwgScpS5jO0c45TTC2bAeS2sg7lBe3tZHU+aMpsabsi5aA0zieYQmOcuooboGhHojohORsQOq9qToAZxgqkKCcxUmU4F+vAyPtnxc6ZeSUwh2173SKO2Zz1ouD+2DFYGyaJmomXQyfP8Ef6+fXrmooVLsrBqjIOCPMAHW1KZa1ETZ42lNVZng0b3dYUevWft1bAfzheGm9lj21K9GjgQc+FulLnJX3yeNys0JFGqezMEnCdLaJU3I3I9PJZ/v6xf02Zj+Qpwz/J87J9H5EPAOKDF99jeIHAAD//wMAUEsDBBQABgAIAAAAIQC43RMi7QEAAPkDAAAQAAgBZG9jUHJvcHMvYXBwLnhtbCCiBAEooAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJxTwW4TMRC9I/EPiy89Nd5NowhFjqsqBfVARaSkvSLjnc1a7Nore7pKOMMJVeLEqRcOSEhIcODQC/wNEfkMvLvtdksjBNzGM88zb56f2f4yz4ISrFNGj0nUC0kAWppY6cWYnMwf7z4kgUOhY5EZDWOyAkf2+f17bGpNARYVuMC30G5MUsRiRKmTKeTC9XxZ+0pibC7QH+2CmiRREg6NPMtBI+2H4ZDCEkHHEO8WbUPSdByV+L9NYyMrfu50vio8Yc4OiiJTUqDfkh8raY0zCQbHQiqNxqXBo6WEjNEujHmeM5BnVuGKh4x2j2wmRQYTP4InInPA6E2CHYGo5JsKZR1nJY5KkGhs4NRLL+CABM+Fg4rYmJTCKqHRE6xgzaGOs8Kh5evLDz++X2zef2TU15tcHXah3VgNeFQDfPBH4FX/15frt+c/v7xaX5z/w4j+9hEVx2ZVP/u2CHOFGbinyVRY3KLJXleTmlqjSMNy8+nN5uu39bvPQT/sD6MoHITNkleCtNLsbEPuPJha/8jPDiyI7o5/d6shfkeb+kH9lr/tNTF5IfTKF9roidIv3EkxN4cC4dost5NslgoLsfdXa6Y2wY68T2xWNZmkQi8gvsbcLVQmP21+Mo+GvXAv9K7t5Bi9+bP8FwAAAP//AwBQSwECLQAUAAYACAAAACEAJ3ialZcBAAAXBgAAEwAAAAAAAAAAAAAAAAAAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQItABQABgAIAAAAIQC1VTAj9AAAAEwCAAALAAAAAAAAAAAAAAAAANADAABfcmVscy8ucmVsc1BLAQItABQABgAIAAAAIQBUhm734wMAALcJAAAPAAAAAAAAAAAAAAAAAPUGAAB4bC93b3JrYm9vay54bWxQSwECLQAUAAYACAAAACEAkgeU7AQBAAA/AwAAGgAAAAAAAAAAAAAAAAAFCwAAeGwvX3JlbHMvd29ya2Jvb2sueG1sLnJlbHNQSwECLQAUAAYACAAAACEAvKzmdooNAACFOQAAGAAAAAAAAAAAAAAAAABJDQAAeGwvd29ya3NoZWV0cy9zaGVldDEueG1sUEsBAi0AFAAGAAgAAAAhADBn+STMBwAAGCIAABMAAAAAAAAAAAAAAAAACRsAAHhsL3RoZW1lL3RoZW1lMS54bWxQSwECLQAUAAYACAAAACEAmBE4SnIGAACBOQAADQAAAAAAAAAAAAAAAAAGIwAAeGwvc3R5bGVzLnhtbFBLAQItABQABgAIAAAAIQCJ15AkGQQAAHAQAAAUAAAAAAAAAAAAAAAAAKMpAAB4bC9zaGFyZWRTdHJpbmdzLnhtbFBLAQItABQABgAIAAAAIQDPM7zzPAIAAPoEAAAbAAAAAAAAAAAAAAAAAO4tAAB4bC9kcmF3aW5ncy92bWxEcmF3aW5nMS52bWxQSwECLQAKAAAAAAAAACEAXfgeovpHAAD6RwAAEwAAAAAAAAAAAAAAAABjMAAAeGwvbWVkaWEvaW1hZ2UxLnBuZ1BLAQItABQABgAIAAAAIQCsjhMN3wAAANYBAAAjAAAAAAAAAAAAAAAAAI54AAB4bC93b3Jrc2hlZXRzL19yZWxzL3NoZWV0MS54bWwucmVsc1BLAQItABQABgAIAAAAIQAvLPPIvgAAACQBAAAmAAAAAAAAAAAAAAAAAK55AAB4bC9kcmF3aW5ncy9fcmVscy92bWxEcmF3aW5nMS52bWwucmVsc1BLAQItABQABgAIAAAAIQAmVw8BHwEAAKwGAAAnAAAAAAAAAAAAAAAAALB6AAB4bC9wcmludGVyU2V0dGluZ3MvcHJpbnRlclNldHRpbmdzMS5iaW5QSwECLQAUAAYACAAAACEAc3P2ipYAAACqAAAAEAAAAAAAAAAAAAAAAAAUfAAAeGwvY2FsY0NoYWluLnhtbFBLAQItABQABgAIAAAAIQD0vqTARAEAAGcCAAARAAAAAAAAAAAAAAAAANh8AABkb2NQcm9wcy9jb3JlLnhtbFBLAQItABQABgAIAAAAIQC43RMi7QEAAPkDAAAQAAAAAAAAAAAAAAAAAFN/AABkb2NQcm9wcy9hcHAueG1sUEsFBgAAAAAQABAAQgQAAHaCAAAAAA==';
 
 /* ---------- 材料進場／入庫 ---------- */
 PAGES.receive = function () {
@@ -770,7 +987,7 @@ function rcvChange() {
   const pos = openPOs(m.物料ID), pre = UI.rcvPO && pos.find(x => x.請購ID === UI.rcvPO) ? UI.rcvPO : (pos[0] ? pos[0].請購ID : '');
   box.innerHTML = matInfo(m) +
     (pos.length ? '<label>對應請購單 <span class="muted small" style="font-weight:400">到貨數量會累加到這張請購單</span></label><select class="inp" id="rcvPO" onchange="rcvPOHint()">' +
-      pos.map(x => '<option value="' + x.請購ID + '"' + (x.請購ID === pre ? ' selected' : '') + '>' + esc(x.請購日期) + ' 請購 ' + fmtN(x.數量) + ' ' + esc(m.單位) + '（已到 ' + fmtN(x.已到貨數量 || 0) + '，尚欠 ' + fmtN(poRemain(x)) + '）' + (x.預計到貨日 ? '　預計 ' + esc(x.預計到貨日) : '') + '</option>').join('') +
+      pos.map(x => '<option value="' + x.請購ID + '"' + (x.請購ID === pre ? ' selected' : '') + '>' + (x.請購單號 ? esc(x.請購單號) + (x.分項 ? '（' + esc(x.分項) + '）' : '') + '　' : esc(x.請購日期) + ' ') + '請購 ' + fmtN(x.數量) + ' ' + esc(m.單位) + '（已到 ' + fmtN(x.已到貨數量 || 0) + '，尚欠 ' + fmtN(poRemain(x)) + '）' + (x.預計到貨日 ? '　需求 ' + esc(x.預計到貨日) : '') + '</option>').join('') +
       '<option value="">不對應請購單</option></select><div class="small muted" id="rcvPOHint"></div>' : '') +
     '<div class="grid2"><div><label>進場日期</label><input type="date" class="inp" id="rcvDate" value="' + today() + '" max="' + today() + '"></div>' +
     '<div><label>存放位置</label>' + selNew('rcvLoc', locs.concat(allLocations()), locs[0] || '') + '</div></div>' +
@@ -1014,26 +1231,36 @@ function recordArea() {
     (keys.length ? body : '<div class="empty">沒有符合的施工紀錄</div>') + '</div>';
 }
 /* ---------- 期初區域用量補登 ---------- */
-function unplacedOf(mid) {
-  const ts = IX.tBy[mid] || [];
-  const un = ts.filter(t => t.類型 === '領出' && !String(t.施工地點 || '').trim()).reduce((a, t) => a + num(t.數量), 0);
-  const al = ts.filter(t => t.類型 === '區域分配').reduce((a, t) => a + num(t.數量), 0);
-  return Math.max(0, un - al);
+/** 補登期初區域用量：拆解「可分配」怎麼來的。upTo＝截至日期（之後的領出不算期初） */
+function allocInfo(mid, upTo) {
+  const ts = IX.tBy[mid] || [], outs = ts.filter(t => t.類型 === '領出');
+  const d = t => String(t.時間 || '').slice(0, 10), noPl = t => !String(t.施工地點 || '').trim();
+  const sum = a => a.reduce((x, t) => x + num(t.數量), 0);
+  const placed = outs.filter(t => !noPl(t)), late = outs.filter(t => noPl(t) && upTo && d(t) > upTo), base = outs.filter(t => noPl(t) && !(upTo && d(t) > upTo));
+  const allocs = ts.filter(t => t.類型 === '區域分配');
+  const noDeduct = outs.filter(t => !(num(t.數量) > 0) && num(t.實際用量) > 0);
+  const r = { total: sum(outs), nOut: outs.length, placed: sum(placed), nPlaced: placed.length, late: sum(late), nLate: late.length, base: sum(base), nBase: base.length,
+    alloc: sum(allocs), nAlloc: allocs.length, noDeduct: noDeduct.length, outs: outs, allocs: allocs };
+  r.avail = Math.max(0, r.base - r.alloc);
+  return r;
 }
+function unplacedOf(mid) { return allocInfo(mid, AL && AL.upTo).avail; }
 function lastSunday() { const d = new Date(); d.setDate(d.getDate() - (d.getDay() || 7)); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 let AL = null;
 function openAlloc() {
+  AL = null;
   const mats = matsSorted(m => unplacedOf(m.物料ID) > 1e-9);
   if (!mats.length) return ask('沒有需要補登的用量', { msg: '目前所有領出紀錄都有施工地點，或已全部分配完畢。' });
-  AL = { rows: [{}, {}, {}], mats: mats };
+  AL = { rows: [{}, {}, {}], mats: mats, upTo: lastSunday() };
   const places = uniq((D.txns || []).filter(t => t.類型 === '領出' || t.類型 === '區域分配').map(t => t.施工地點).filter(Boolean));
   openModal('<h2>補登期初區域用量</h2><p class="muted small">初期沒有記錄施工地點的用量，可以在這裡依「施工地點 × 材料總量」補登。只補記用在哪裡，<b>不會再扣庫存</b>；不需區分顏色。每項材料最多可分配「未記施工地點」的用量。</p>' +
-    '<div class="grid2"><div><label>截至日期</label><input type="date" class="inp" id="alDate" value="' + lastSunday() + '" max="' + today() + '"></div></div>' +
+    '<div class="grid2"><div><label>截至日期</label><input type="date" class="inp" id="alDate" value="' + AL.upTo + '" max="' + today() + '" onchange="AL.upTo=this.value;alDraw()"></div>' +
+    '<div class="small muted" style="align-self:end">只計算截至這天、未記施工地點的領出（扣料）數量</div></div>' +
     '<datalist id="alPlaces">' + places.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>' +
     '<div id="alRows" style="margin-top:10px"></div>' +
     '<div class="row" style="margin-top:6px"><button class="btn sm" onclick="AL.rows.push({});alDraw()">＋ 新增一列</button><span class="sp"></span><a href="#" class="small" onclick="$(\'#alPasteBox\').classList.toggle(\'hide\');return false">從 Excel 貼上</a></div>' +
     '<div id="alPasteBox" class="hide" style="margin-top:8px"><textarea class="inp" id="alPaste" placeholder="施工地點	名稱	規格	數量	實際使用量（選填）"></textarea><div class="row" style="margin-top:6px"><span class="small muted">第一列需為標題；名稱也可用別名</span><span class="sp"></span><button class="btn sm" onclick="alPasteIn()">加入</button></div></div>' +
-    '<div id="alSum" class="info small"></div>' +
+    '<div id="alSum" class="info small"></div><div id="alDet"></div>' +
     '<div class="row end" style="margin-top:14px"><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" id="alSave" onclick="alSave()">儲存補登</button></div>', true);
   alDraw();
 }
@@ -1054,10 +1281,18 @@ function alSum() {
   const need = {};
   AL.rows.forEach(r => { if (r.mid && num(r.qty) > 0) need[r.mid] = (need[r.mid] || 0) + num(r.qty); });
   const over = Object.keys(need).filter(id => need[id] > unplacedOf(id) + 1e-9);
-  $('#alSum').innerHTML = Object.keys(need).length
-    ? Object.keys(need).map(id => { const m = IX.mat[id], rest = unplacedOf(id) - need[id];
-        return esc(label(m)) + '：本次 ' + fmtN(need[id]) + ' ' + esc(m.單位) + '，' + (rest < -1e-9 ? '<span style="color:var(--bad)">超過可分配量 ' + fmtN(-rest) + '</span>' : '剩餘未分配 ' + fmtN(rest)); }).join('<br>')
-    : '填好施工地點、材料與數量後，這裡會顯示分配情形。';
+  const picked = uniq(AL.rows.map(r => r.mid).filter(Boolean));
+  $('#alSum').innerHTML = picked.length
+    ? picked.map(id => { const m = IX.mat[id], u = esc(m.單位), I = allocInfo(id, AL.upTo), n = need[id] || 0, rest = I.avail - n;
+        return '<div style="margin-bottom:8px"><b>' + esc(label(m)) + '</b>：' + (n ? '本次 ' + fmtN(n) + ' ' + u + '，' + (rest < -1e-9 ? '<span style="color:var(--bad)">超過可分配量 ' + fmtN(-rest) + '</span>' : '剩餘未分配 ' + fmtN(rest) + ' ' + u) : '可分配 ' + fmtN(I.avail) + ' ' + u) +
+          '<div class="muted">異動紀錄領出（扣料）共 ' + fmtN(I.total) + ' ' + u + '（' + I.nOut + ' 筆）' +
+          (I.placed ? '　－ 已記施工地點 ' + fmtN(I.placed) + '（' + I.nPlaced + ' 筆，已算在各區域）' : '') +
+          (I.late ? '　－ 截至日期之後 ' + fmtN(I.late) + '（' + I.nLate + ' 筆）' : '') +
+          (I.alloc ? '　－ 先前已補登 ' + fmtN(I.alloc) + '（' + I.nAlloc + ' 筆）' : '') +
+          '　＝ 可分配 ' + fmtN(I.avail) + ' ' + u +
+          (I.noDeduct ? '<br>另有 ' + I.noDeduct + ' 筆只填實際使用量、未扣料，不計入。' : '') +
+          '　<a href="#" onclick="alDetail(\'' + id + '\');return false">看明細</a></div></div>'; }).join('')
+    : '選好材料後，這裡會列出可分配數量的計算方式（與異動紀錄對照）。';
   $('#alSave').disabled = over.length > 0;
 }
 function alPasteIn() {
@@ -1078,6 +1313,15 @@ function alPasteIn() {
   alDraw();
   toast('加入 ' + ok + ' 列' + (miss.length ? '，' + miss.length + ' 列對不到材料' : ''), miss.length ? 'err' : '');
   if (miss.length) $('#alSum').innerHTML += '<br><span style="color:var(--bad)">對不到（或同名多種規格、需填規格）：' + esc(miss.join('、')) + '</span>';
+}
+function alDetail(mid) {
+  const m = IX.mat[mid], I = allocInfo(mid, AL.upTo), u = esc(m.單位), box = $('#alDet');
+  const tag = t => t.類型 === '區域分配' ? '<span class="chip pri">已補登</span>' : String(t.施工地點 || '').trim() ? '<span class="chip ok">已記地點</span>' : String(t.時間).slice(0, 10) > AL.upTo ? '<span class="chip">截至日之後</span>' : '<span class="chip warn">可分配</span>';
+  const rows = I.outs.concat(I.allocs).slice().sort((a, b) => String(a.時間).localeCompare(String(b.時間)));
+  box.innerHTML = '<h3 style="margin-top:10px">' + esc(label(m)) + ' 的領出與補登明細</h3><div class="tbl"><table><thead><tr><th>日期</th><th>類型</th><th class="num">扣料</th><th>實際使用</th><th>施工地點</th><th>計算</th><th>備註</th></tr></thead><tbody>' +
+    rows.map(t => '<tr><td class="small">' + esc(String(t.時間).slice(0, 10)) + '</td><td class="small">' + esc(t.類型 === '區域分配' ? '期初區域用量' : t.類型) + '</td><td class="num">' + fmtN(num(t.數量)) + ' ' + u + '</td><td class="small">' + (num(t.實際用量) > 0 ? fmtN(t.實際用量) + ' ' + esc(useUnit(m)) : '') + '</td><td class="small">' + esc(t.施工地點 || '') + '</td><td>' + tag(t) + '</td><td class="small muted">' + esc(t.備註 || '') + '</td></tr>').join('') +
+    '</tbody></table></div><div class="row end"><a href="#" class="small" onclick="$(\'#alDet\').innerHTML=\'\';return false">收起明細</a></div>';
+  box.scrollIntoView({ block: 'nearest' });
 }
 async function alSave() {
   const rows = AL.rows.filter(r => r.mid && num(r.qty) > 0).map(r => ({ materialId: r.mid, qty: num(r.qty), used: num(r.used), place: (r.place || '').trim() }));
@@ -1382,6 +1626,7 @@ function foldPage(mode) {
        ['缺件', miss], ['已收集', allD.length - miss]];
 
   let html = '<div class="card"><div class="row"><h2 style="margin:0">' + (rv ? '送審進度' : '自檢追蹤（缺件清單）') + '</h2><span class="sp"></span>' +
+    (rv ? '' : '<button class="btn sm" onclick="openMissExport()">⬇ 匯出缺件 Excel</button>') +
     '<span class="small muted">' + (rv ? FLOW.join(' → ') + '（任一階段可退件）' : '大類 → 材料細項 → 進場日期 → 自檢資料') + '</span></div>' +
     '<div class="stats" style="margin-top:10px">' + stats.map(s => '<div class="stat' + (rv ? ' clickable' : '') + (rv && UI.rvFilter === s[2] ? ' on' : '') + '"' +
       (rv ? ' data-s="' + esc(s[2]) + '" onclick="UI.rvFilter=(UI.rvFilter===this.dataset.s?\'全部\':this.dataset.s);render()"' : '') + '><b>' + s[1] + '</b><span>' + s[0] + (rv ? ' 批' : '') + '</span></div>').join('') + '</div>' +
@@ -1480,28 +1725,142 @@ async function editStageDate(bid, j, date) {
   try { const r = await call('editStageDate', { batchId: bid, index: j, date: date }); const i = D.batches.findIndex(x => x.批次ID === bid); if (i >= 0) D.batches[i] = r.batch; UI.openLog = bid; index(); render(); toast('已修改執行日期為 ' + date); }
   catch (e) { toast(e.message, 'err'); render(); }
 }
+/** 與這份文件共用的其他文件（同一天、同一供應商的追蹤批次中，同名的可共用文件） */
+function sellerOf(m) {
+  const ch = String((m && m.購買流程) || '').split(/[>＞→]/).map(s => s.trim()).filter(Boolean);
+  if (ch.length && ch[ch.length - 1] === '工地') ch.pop();
+  return ch.length ? ch[ch.length - 1] : String((m && m.供應商) || '').trim();
+}
+const isShareDoc = name => (D.shareKeys || []).some(k => String(name).indexOf(k) >= 0);
+function linkedDocs(d) {
+  if (!isShareDoc(d.文件項目)) return [];
+  const b = IX.bat[d.批次ID]; if (!b) return [];
+  const seller = sellerOf(IX.mat[b.物料ID]); if (!seller) return [];
+  return (D.batches || []).filter(x => x.批次ID !== b.批次ID && x.自檢追蹤 === '是' && x.進場日期 === b.進場日期 && sellerOf(IX.mat[x.物料ID]) === seller)
+    .map(x => (IX.dBy[x.批次ID] || []).find(y => y.文件項目 === d.文件項目)).filter(Boolean);
+}
+/** 文件提供者：「原廠」換成購買流程中的原廠名稱，方便直接聯絡 */
+function providerName(d) {
+  const b = IX.bat[d.批次ID], m = b && IX.mat[b.物料ID];
+  const ch = String((m && m.購買流程) || '').split(/[>＞→]/).map(s => s.trim()).filter(Boolean);
+  if (d.提供者 === '原廠' && ch[0] && ch[0] !== '原廠') return ch[0] + '（原廠）';
+  if (d.提供者 === '工地') return '工地（自行準備）';
+  return d.提供者 || '（未指定）';
+}
 function docRow(d) {
-  const st = docSt(d);
+  const st = docSt(d), lk = linkedDocs(d);
   return '<div class="doc ' + (DOC_CLS[st] || 's1') + '"><span class="muted small">' + esc(d.序號) + '.</span><div><div class="nm">' + esc(d.文件項目) + '</div>' +
     '<div class="meta">' + (d.備註 ? '📝 ' + esc(d.備註) + '　' : '') + (d.更新者 ? esc(d.更新者) + ' ' : '') + esc(String(d.更新時間 || '').slice(5, 16)) +
-    '　<a href="#" onclick="noteDoc(\'' + d.文件ID + '\');return false">備註</a>' + (PAGE === 'inspect' ? '　<a href="#" style="color:var(--bad)" onclick="delDoc(\'' + d.文件ID + '\');return false">移除</a>' : '') + '</div></div>' +
-    '<div class="pv small muted">' + esc(d.提供者) + '</div>' +
+    '　<a href="#" onclick="noteDoc(\'' + d.文件ID + '\');return false">備註</a>' + (PAGE === 'inspect' ? '　<a href="#" style="color:var(--bad)" onclick="delDoc(\'' + d.文件ID + '\');return false">移除</a>' : '') + '</div>' +
+    (lk.length ? '<div class="meta" style="margin-top:3px"><span class="chip pri" title="' + esc(lk.map(x => label(IX.mat[IX.bat[x.批次ID].物料ID])).join('、')) + '">🔗 共用：' + esc(lk.map(x => label(IX.mat[IX.bat[x.批次ID].物料ID])).join('、')) + '</span></div>' : '') + '</div>' +
+    '<div class="pv small muted">' + esc(providerName(d)) + '</div>' +
     '<div class="sl"><select onchange="setDoc(\'' + d.文件ID + '\',this.value)">' + (D.statuses || []).map(s => '<option' + (s === st ? ' selected' : '') + '>' + s + '</option>').join('') + '</select></div></div>';
+}
+/* ---------- 匯出缺件清單（Excel） ---------- */
+/** 整理所有已進場追蹤批次的缺件；共用文件（同天、同供應商、同名）只算一份 */
+function collectMissing() {
+  const rows = [], seen = {};
+  trackedMats().forEach(m => batchesTracked(m.物料ID).forEach(b => (IX.dBy[b.批次ID] || []).filter(MISSING).forEach(d => {
+    const lk = linkedDocs(d), gid = lk.length ? [d.文件ID].concat(lk.map(x => x.文件ID)).sort()[0] : d.文件ID;
+    if (seen[gid]) { seen[gid].mats.push(m); seen[gid].batches.push(b); return; }
+    const r = { gid: gid, d: d, m: m, b: b, mats: [m], batches: [b], provider: providerName(d), shared: lk.length > 0 };
+    seen[gid] = r; rows.push(r);
+  })));
+  return rows;
+}
+function loadExcelJS() {
+  if (window.ExcelJS) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    sc.onload = () => res(); sc.onerror = () => rej(new Error('無法載入 Excel 元件，請檢查網路'));
+    document.head.appendChild(sc);
+  });
+}
+function openMissExport() {
+  const rows = collectMissing();
+  const byP = {}; rows.forEach(r => { (byP[r.provider] = byP[r.provider] || []).push(r); });
+  const ps = Object.keys(byP).sort((a, b) => byP[b].length - byP[a].length);
+  const raw = rows.reduce((a, r) => a + r.batches.length, 0);
+  openModal('<h2>匯出缺件清單</h2><p class="muted small">所有已進場、列入自檢追蹤的批次中，狀態為「未收集」「需補正」的文件。同一天、同一供應商的共用文件只算一份（原本 ' + raw + ' 份，合併後 ' + rows.length + ' 份）。</p>' +
+    '<div class="tbl"><table><thead><tr><th>廠商／提供者</th><th class="num">待收文件</th><th>主要文件</th></tr></thead><tbody>' +
+    ps.map(p => { const c = {}; byP[p].forEach(r => { const k = r.d.文件項目; c[k] = (c[k] || 0) + 1; });
+      return '<tr><td><b>' + esc(p) + '</b></td><td class="num">' + byP[p].length + '</td><td class="small">' + Object.keys(c).sort((a, b) => c[b] - c[a]).slice(0, 4).map(k => esc(k) + ' ' + c[k]).join('、') + (Object.keys(c).length > 4 ? '…' : '') + '</td></tr>'; }).join('') +
+    '</tbody></table></div>' +
+    '<p class="small muted">Excel 內含三個工作表：①依廠商待收（直接交給辦公室分工聯絡）②缺件統計（依廠商、依文件、依材料）③缺件明細（每一批的每一份）。已加上篩選與凍結標題，可直接排序、篩選、增加欄位。</p>' +
+    '<div class="row end" style="margin-top:12px"><button class="btn" onclick="closeModal()">關閉</button><button class="btn pri" id="mxBtn" onclick="exportMissing()">⬇ 下載 Excel</button></div>', true);
+}
+async function exportMissing() {
+  const btn = $('#mxBtn'); if (btn) { btn.disabled = true; btn.textContent = '產生中…'; }
+  try {
+    await loadExcelJS();
+    const rows = collectMissing(), wb = new ExcelJS.Workbook(), now = today();
+    wb.creator = D.title;
+    const head = (ws, cols) => {
+      ws.columns = cols.map(c => ({ header: c[0], key: c[1], width: c[2] }));
+      ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF14213D' } };
+      ws.getRow(1).alignment = { vertical: 'middle' };
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+    };
+    const finish = ws => {
+      ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columns.length } };
+      ws.eachRow((r, i) => { r.alignment = { vertical: 'top', wrapText: true }; if (i > 1) r.eachCell(c => { c.border = { bottom: { style: 'thin', color: { argb: 'FFDDDDDD' } } }; }); });
+    };
+    const matTxt = r => uniq(r.mats.map(m => label(m))).join('、');
+    // ① 依廠商待收
+    const w1 = wb.addWorksheet('依廠商待收');
+    head(w1, [['廠商／提供者', 'p', 18], ['待收文件', 'doc', 26], ['材料（含共用）', 'mat', 40], ['大類', 'cat', 14], ['進場日期', 'date', 12], ['進場數量', 'qty', 14], ['狀態', 'st', 10], ['備註', 'note', 28], ['共用', 'share', 10], ['追蹤進度（辦公室填）', 'track', 22]]);
+    rows.slice().sort((a, b) => a.provider.localeCompare(b.provider, 'zh-Hant') || a.d.文件項目.localeCompare(b.d.文件項目, 'zh-Hant') || a.b.進場日期.localeCompare(b.b.進場日期))
+      .forEach(r => w1.addRow({ p: r.provider, doc: r.d.文件項目, mat: matTxt(r), cat: catLabel(grp(r.m)), date: r.b.進場日期,
+        qty: r.batches.map(b => fmtN(b.數量) + ' ' + IX.mat[b.物料ID].單位).join('、'), st: docSt(r.d), note: r.d.備註 || '', share: r.shared ? '共用 ' + r.batches.length + ' 批' : '', track: '' }));
+    finish(w1);
+    // ② 缺件統計
+    const w2 = wb.addWorksheet('缺件統計');
+    w2.columns = [{ width: 30 }, { width: 12 }, { width: 4 }, { width: 30 }, { width: 12 }, { width: 4 }, { width: 40 }, { width: 10 }, { width: 12 }];
+    const cnt = f => { const c = {}; rows.forEach(r => { const k = f(r); c[k] = (c[k] || 0) + 1; }); return Object.keys(c).sort((a, b) => c[b] - c[a]).map(k => [k, c[k]]); };
+    const byP = cnt(r => r.provider), byD = cnt(r => r.d.文件項目);
+    const byM = {}; trackedMats().forEach(m => { const bs = batchesTracked(m.物料ID); const n = bs.reduce((a, b) => a + (IX.dBy[b.批次ID] || []).filter(MISSING).length, 0); if (n) byM[label(m)] = [bs.length, n]; });
+    w2.getCell('A1').value = '缺件統計（匯出日期 ' + now + '；共用文件合併後共 ' + rows.length + ' 份）'; w2.getCell('A1').font = { bold: true, size: 13 };
+    [['A', 'B', '依廠商／提供者', byP], ['D', 'E', '依文件項目', byD]].forEach(([c1, c2, t, data]) => {
+      w2.getCell(c1 + '3').value = t; w2.getCell(c2 + '3').value = '份數';
+      [c1, c2].forEach(c => { w2.getCell(c + '3').font = { bold: true }; w2.getCell(c + '3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F0FC' } }; });
+      data.forEach((x, i) => { w2.getCell(c1 + (4 + i)).value = x[0]; w2.getCell(c2 + (4 + i)).value = x[1]; });
+    });
+    ['G', 'H', 'I'].forEach((c, i) => { w2.getCell(c + '3').value = ['依材料', '進場批數', '缺件份數'][i]; w2.getCell(c + '3').font = { bold: true }; w2.getCell(c + '3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F0FC' } }; });
+    Object.keys(byM).sort((a, b) => byM[b][1] - byM[a][1]).forEach((k, i) => { w2.getCell('G' + (4 + i)).value = k; w2.getCell('H' + (4 + i)).value = byM[k][0]; w2.getCell('I' + (4 + i)).value = byM[k][1]; });
+    // ③ 缺件明細
+    const w3 = wb.addWorksheet('缺件明細');
+    head(w3, [['大類', 'cat', 14], ['材料', 'name', 30], ['規格', 'spec', 22], ['進場日期', 'date', 12], ['進場數量', 'qty', 10], ['單位', 'unit', 8], ['文件項目', 'doc', 26], ['提供者', 'p', 18], ['狀態', 'st', 10], ['備註', 'note', 28], ['共用', 'share', 10]]);
+    trackedMats().forEach(m => batchesTracked(m.物料ID).forEach(b => (IX.dBy[b.批次ID] || []).filter(MISSING).forEach(d => {
+      const lk = linkedDocs(d);
+      w3.addRow({ cat: catLabel(grp(m)), name: m.名稱, spec: m.規格, date: b.進場日期, qty: num(b.數量), unit: m.單位, doc: d.文件項目, p: providerName(d), st: docSt(d), note: d.備註 || '', share: lk.length ? '與 ' + lk.length + ' 批共用' : '' });
+    })));
+    finish(w3);
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = '自檢缺件清單_' + now + '.xlsx';
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    window.__lastExport = buf;
+    toast('已產生 Excel（共 ' + rows.length + ' 份待收文件）');
+  } catch (e) { toast(e.message || String(e), 'err'); }
+  if (btn) { btn.disabled = false; btn.textContent = '⬇ 下載 Excel'; }
 }
 function patchDocs(docs, removeId) {
   if (removeId) D.docs = D.docs.filter(d => d.文件ID !== removeId);
   (docs || []).forEach(n => { const i = D.docs.findIndex(d => d.文件ID === n.文件ID); if (i >= 0) D.docs[i] = n; else D.docs.push(n); });
   index(); render();
 }
-async function setDoc(id, st) { try { const r = await call('saveDoc', { id: id, 狀態: st }); patchDocs(r.docs); } catch (e) { toast(e.message, 'err'); render(); } }
+async function setDoc(id, st) { try { const r = await call('saveDoc', { id: id, 狀態: st }); patchDocs(r.docs); if (r.shared) toast('已同步更新共用的 ' + r.shared + ' 份'); } catch (e) { toast(e.message, 'err'); render(); } }
 async function noteDoc(id) {
   const d = D.docs.find(x => x.文件ID === id);
   const v = await ask('備註：' + d.文件項目, { input: true, value: d.備註, ph: '例：已請原廠補寄、退件原因…' });
   if (v === null) return;
-  try { const r = await call('saveDoc', { id: id, 備註: v }); patchDocs(r.docs); } catch (e) { toast(e.message, 'err'); }
+  try { const r = await call('saveDoc', { id: id, 備註: v }); patchDocs(r.docs); if (r.shared) toast('備註已同步到共用的 ' + r.shared + ' 份'); } catch (e) { toast(e.message, 'err'); }
 }
 async function bulk(bid, from, to) {
-  try { const r = await call('bulkDocs', { batchId: bid, from: from, to: to }); patchDocs(r.docs); toast('已更新 ' + r.count + ' 項'); } catch (e) { toast(e.message, 'err'); }
+  try { const r = await call('bulkDocs', { batchId: bid, from: from, to: to }); patchDocs(r.docs); toast('已更新 ' + r.count + ' 項' + (r.shared ? '，並同步共用的 ' + r.shared + ' 份' : '')); } catch (e) { toast(e.message, 'err'); }
 }
 async function addDoc(bid) {
   const v = await ask('新增文件項目', { input: true, ph: '例：材料型錄、試驗報告' }); if (!v) return;
@@ -1526,17 +1885,26 @@ PAGES.settings = function () {
   const t = UI.setTab;
   let body = '';
   if (t === 'perm') {
-    body = '<p class="muted small">「公開」：任何拿到連結的人不需登入即可觀看與操作。「需登入」：必須以帳號登入。系統設定頁永遠只限管理員。</p>' +
-      '<table><thead><tr><th>頁面</th><th>權限</th><th>此頁連結</th></tr></thead><tbody>' +
-      D.pages.filter(p => p.id !== 'settings').map(p => '<tr><td>' + esc(p.name) + '</td><td><select class="inp perm" data-id="' + p.id + '" style="width:auto">' +
-        ['公開', '需登入'].map(x => '<option' + (x === p.perm ? ' selected' : '') + '>' + x + '</option>').join('') + '</select></td>' +
-        '<td><input class="inp small" readonly value="' + esc(pageUrl(p.id)) + '" onclick="this.select();copyText(this.value)"></td></tr>').join('') +
-      '</tbody></table><div class="row end" style="margin-top:12px"><button class="btn pri" onclick="savePerms()">儲存權限</button></div>';
+    const roles = (D.roles || ['管理員', '一般']).filter(r => r !== '管理員');
+    body = '<p class="muted small">「公開」：任何拿到連結的人不需登入即可觀看與操作。「所有登入帳號」：任何角色登入後都能使用。「指定角色」：只有勾選的角色看得到這一頁（沒權限的頁面不會出現在選單）。管理員可進入所有頁面；系統設定只限管理員。角色可在「帳號管理」新增。</p>' +
+      '<div class="tbl"><table><thead><tr><th>頁面</th><th>開放對象</th><th>指定角色</th><th>此頁連結</th></tr></thead><tbody>' +
+      D.pages.filter(p => p.id !== 'settings').map(p => {
+        const mode = p.perm === '公開' ? 'pub' : String(p.perm).indexOf('角色:') === 0 ? 'role' : 'all';
+        const sel = mode === 'role' ? String(p.perm).slice(3).split(',') : [];
+        return '<tr><td>' + esc(p.name) + '</td><td><select class="inp perm" data-id="' + p.id + '" style="width:auto" onchange="this.closest(\'tr\').querySelector(\'.prole\').classList.toggle(\'hide\',this.value!==\'role\')">' +
+          [['pub', '公開'], ['all', '所有登入帳號'], ['role', '指定角色']].map(x => '<option value="' + x[0] + '"' + (x[0] === mode ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></td>' +
+          '<td><div class="prole row' + (mode === 'role' ? '' : ' hide') + '" style="gap:10px">' + roles.map(r => '<label class="chk" style="margin:0;font-size:13.5px"><input type="checkbox" value="' + esc(r) + '"' + (sel.indexOf(r) >= 0 ? ' checked' : '') + '> ' + esc(r) + '</label>').join('') + '</div></td>' +
+          '<td><input class="inp small" readonly value="' + esc(pageUrl(p.id)) + '" onclick="this.select();copyText(this.value)"></td></tr>';
+      }).join('') +
+      '</tbody></table></div><div class="row end" style="margin-top:12px"><button class="btn pri" onclick="savePerms()">儲存權限</button></div>';
   } else if (t === 'user') {
     body = '<div class="row end"><button class="btn pri" onclick="userForm()">＋ 新增帳號</button></div><div class="tbl"><table><thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>狀態</th><th></th></tr></thead><tbody>' +
       (D.users || []).map(u => '<tr><td>' + esc(u.帳號) + '</td><td>' + esc(u.顯示名稱) + '</td><td>' + esc(u.角色) + '</td><td>' + (u.啟用 === '否' ? '<span class="chip bad">停用</span>' : '<span class="chip ok">啟用</span>') +
         '</td><td><button class="btn sm" data-a="' + esc(u.帳號) + '" onclick="userForm(this.dataset.a)">編輯</button></td></tr>').join('') + '</tbody></table></div>' +
-      '<p class="muted small">管理員：可進入系統設定、刪除異動紀錄。一般：可使用所有「需登入」頁面。</p>';
+      '<p class="muted small">管理員：可進入所有頁面、系統設定、刪除異動紀錄。其他角色看得到哪些頁面，在「頁面權限」設定。</p>' +
+      '<h3>角色</h3><p class="muted small">每行一個，例如：辦公室、工地、監造。「管理員」「一般」為固定角色，不用列在這裡。</p>' +
+      '<textarea class="inp" style="min-height:100px;max-width:360px" id="ls_角色">' + esc((D.roles || []).filter(r => r !== '管理員' && r !== '一般').join('\n')) + '</textarea>' +
+      '<div><button class="btn sm" style="margin-top:6px" onclick="saveList(\'角色\')">儲存角色</button></div>';
   } else if (t === 'legacy') {
     body = '<h3 style="margin-top:0">A. 舊「材料進場與自檢管理」網頁的資料</h3>' +
       '<p class="muted small">選擇「舊資料匯入.json」檔案。會匯入：七大類名稱、材料細項（含規格、單位、購買流程、供應商）、每一筆進場與施工紀錄、自檢文件與送審狀態。名稱＋規格已存在的物料不會重複建立。只能匯入一次。</p>' +
@@ -1546,8 +1914,8 @@ PAGES.settings = function () {
       '<p class="muted small">打開舊的物料管理試算表，選取物料清單（含第一列標題）複製，到「材料管理 → 批次匯入」貼上。可辨識：名稱、規格、單位、庫存（成為期初庫存）、存放位置、照片（雲端硬碟連結或檔案 ID）等欄位。已存在的物料只補空白欄位、不重複加庫存。</p>' +
       (can('material') ? '<button class="btn" onclick="go(\'material\');setTimeout(openImport,50)">前往批次匯入</button>' : '');
   } else {
-    body = '<p class="muted small">每行一項，順序即為下拉選單與分類的順序。大類請依「材料進場與施工紀錄表」填入七大類，第八大類「吊管支架」固定排在最後；無法歸類的材料請設為配料（共用配料不需列在這裡）。</p><div class="grid3">' +
-      [['人員', D.persons, '人員'], ['工地', D.sites, '工地'], ['大項目', D.categories, '大類（七大類＋吊管支架）']].map(x => '<div><label>' + x[2] + '</label><textarea class="inp" style="min-height:220px" id="ls_' + x[0] + '">' + esc((x[1] || []).join('\n')) + '</textarea>' +
+    body = '<p class="muted small">每行一項，順序即為下拉選單與分類的順序。大類請依「材料進場與施工紀錄表」填入七大類，第八大類「吊管支架」固定排在最後；無法歸類的材料請設為配料（共用配料不需列在這裡）。可共用的自檢文件：同一供應商、同一天進場的批次，文件名稱含這些字的只需交一份，更新狀態時會一起更新。</p><div class="grid3">' +
+      [['人員', D.persons, '人員'], ['大項目', D.categories, '大類（七大類＋吊管支架）'], ['共用文件', D.shareKeys, '可共用的自檢文件（關鍵字）']].map(x => '<div><label>' + x[2] + '</label><textarea class="inp" style="min-height:220px" id="ls_' + x[0] + '">' + esc((x[1] || []).join('\n')) + '</textarea>' +
         '<button class="btn sm" style="margin-top:6px" onclick="saveList(\'' + x[0] + '\')">儲存' + x[0] + '</button></div>').join('') + '</div>';
   }
   return '<div class="card"><h2>系統設定</h2><div class="tabs">' + [['perm', '頁面權限'], ['user', '帳號管理'], ['list', '下拉清單'], ['legacy', '匯入舊資料']].map(x =>
@@ -1582,7 +1950,17 @@ async function legacyImport() {
 }
 function copyText(v) { try { navigator.clipboard.writeText(v).then(() => toast('已複製連結')); } catch (e) {} }
 async function savePerms() {
-  const perms = {}; $$('.perm').forEach(s => perms[s.dataset.id] = s.value);
+  const perms = {}; let bad = '';
+  $$('.perm').forEach(s => {
+    if (s.value === 'pub') perms[s.dataset.id] = '公開';
+    else if (s.value === 'all') perms[s.dataset.id] = '需登入';
+    else {
+      const rs = Array.from(s.closest('tr').querySelectorAll('.prole input:checked')).map(i => i.value);
+      if (!rs.length) bad = D.pages.find(p => p.id === s.dataset.id).name;
+      perms[s.dataset.id] = '角色:' + rs.join(',');
+    }
+  });
+  if (bad) return toast('「' + bad + '」選了指定角色，但沒有勾選任何角色', 'err');
   await run('savePerms', { perms: perms }); toast('權限已儲存');
 }
 async function saveList(sheet) {
@@ -1593,7 +1971,7 @@ function userForm(acc) {
   openModal('<h2>' + (u ? '編輯帳號' : '新增帳號') + '</h2><label>帳號（英數字）</label><input class="inp" id="ufA" value="' + esc(u ? u.帳號 : '') + '"' + (u ? ' disabled' : '') + '>' +
     '<label>顯示名稱</label><input class="inp" id="ufN" value="' + esc(u ? u.顯示名稱 : '') + '">' +
     '<label>' + (u ? '重設密碼（留空＝不變）' : '密碼（至少 4 碼）') + '</label><input class="inp" id="ufP" type="password">' +
-    '<div class="grid2"><div><label>角色</label><select class="inp" id="ufR">' + ['一般', '管理員'].map(x => '<option' + (u && u.角色 === x ? ' selected' : '') + '>' + x + '</option>').join('') + '</select></div>' +
+    '<div class="grid2"><div><label>角色</label><select class="inp" id="ufR">' + (D.roles || ['一般', '管理員']).map(x => '<option' + (u && u.角色 === x ? ' selected' : '') + '>' + x + '</option>').join('') + '</select></div>' +
     '<div><label>狀態</label><select class="inp" id="ufE">' + [['是', '啟用'], ['否', '停用']].map(x => '<option value="' + x[0] + '"' + (u && u.啟用 === x[0] ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></div></div>' +
     '<div class="row" style="margin-top:16px">' + (u && (!D.me || u.帳號 !== D.me.帳號) ? '<button class="btn bad" onclick="delUser(\'' + esc(u.帳號) + '\')">刪除帳號</button>' : '') +
     '<span class="sp"></span><button class="btn" onclick="closeModal()">取消</button><button class="btn pri" onclick="saveUserF(' + (u ? 'false' : 'true') + ')">儲存</button></div>');
