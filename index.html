@@ -1632,21 +1632,25 @@ async function alSave() {
   try { await run('allocate', { date: $('#alDate').value, site: selVal('alSite'), rows: rows }); closeModal(); toast('已補登 ' + rows.length + ' 列期初區域用量'); } catch (e) {}
 }
 function raToggle(k) { UI.raClosed = UI.raClosed || new Set(); UI.raClosed.has(k) ? UI.raClosed.delete(k) : UI.raClosed.add(k); render(); }
+/** 依日期由新到舊排序（補登的舊日期也會排到正確位置） */
+const byTimeDesc = (a, b) => String(b.時間 || '').localeCompare(String(a.時間 || ''));
 function recordDetail(m) {
-  const st = stockOf(m.物料ID), bs = IX.bBy[m.物料ID] || [];
-  const outs = (IX.tBy[m.物料ID] || []).filter(t => t.類型 === '領出').slice().reverse();
-  const allocs = (IX.tBy[m.物料ID] || []).filter(t => t.類型 === '區域分配');
+  const st = stockOf(m.物料ID), bs = (IX.bBy[m.物料ID] || []).slice().sort((a, b) => (b.進場日期 + b.建立時間).localeCompare(a.進場日期 + a.建立時間));
+  const outs = (IX.tBy[m.物料ID] || []).filter(t => t.類型 === '領出').slice().sort(byTimeDesc);
+  const allocs = (IX.tBy[m.物料ID] || []).filter(t => t.類型 === '區域分配').slice().sort(byTimeDesc);
   const init = (IX.tBy[m.物料ID] || []).filter(t => t.類型 === '期初');
   const vs = Object.keys(st.v);
   let h = '';
   if (vs.length) h += '<div style="margin:4px 0 8px"><b class="small">剩餘分項：</b>' + vs.map(k => '<span class="chip pri">' + esc(k) + ' 剩 ' + fmtN(st.v[k]) + ' ' + esc(m.單位) + '</span>').join('') + '</div>';
   h += '<h3>進場紀錄</h3>' + (bs.length || init.length ? '<table><thead><tr><th>進場日期</th><th class="num">數量</th><th>分項</th><th>存放位置</th><th>人員</th><th>自檢資料</th></tr></thead><tbody>' +
+    bs.filter(b => b.進場日期 >= ((init[0] || {}).時間 || '').slice(0, 10)).map(bRow).join('') +
     init.map(t => '<tr><td>' + esc(t.時間.slice(0, 10)) + '</td><td class="num">' + fmtN(t.數量) + '</td><td></td><td>' + esc(t.存放位置) + '</td><td></td><td><span class="chip">期初庫存</span></td></tr>').join('') +
-    bs.map(b => {
+    bs.filter(b => b.進場日期 < ((init[0] || {}).時間 || '').slice(0, 10)).map(bRow).join('') + '</tbody></table>' : '<div class="muted small">尚無進場紀錄</div>');
+  function bRow(b) {
       const ds = IX.dBy[b.批次ID] || [], got = ds.filter(d => !MISSING(d)).length;
       const trk = b.自檢追蹤 === '是' ? (D.docs ? '<span class="chip ' + (got === ds.length && ds.length ? 'ok' : 'warn') + '">' + got + '／' + ds.length + ' 已收集</span>' : '') + stageChip(stageOf(b)) : '<span class="chip">不追蹤</span>';
       return '<tr><td>' + esc(b.進場日期) + '</td><td class="num">' + fmtN(b.數量) + '</td><td class="small">' + esc(vText(pj(b.分項明細))) + '</td><td>' + esc(b.存放位置) + '</td><td>' + esc(b.人員) + '</td><td>' + trk + '</td></tr>';
-    }).join('') + '</tbody></table>' : '<div class="muted small">尚無進場紀錄</div>');
+  }
   const uu = useUnit(m);
   h += '<h3>施工紀錄</h3>' + (outs.length ? '<div class="tbl"><table><thead><tr><th>時間</th><th class="num">扣料</th><th>分項</th><th class="num">實際使用</th><th class="num">現場餘料</th><th>工地</th><th>施工地點</th><th>人員</th></tr></thead><tbody>' +
     outs.map(t => { const u = usedOf(t, m), left = num(t.數量) * useFactor(m) - u;
@@ -1663,7 +1667,7 @@ function toggleSet(set, id) { set.has(id) ? set.delete(id) : set.add(id); render
 /* ---------- 異動紀錄 ---------- */
 PAGES.log = function () {
   const q = (UI.lgQ || '').toLowerCase(), tp = UI.logType, f = UI.lgF || '', t2 = UI.lgT || '';
-  const all = (D.txns || []).slice().reverse().filter(t => (tp === '全部' || t.類型 === tp) &&
+  const all = (D.txns || []).slice().sort(byTimeDesc).filter(t => (tp === '全部' || t.類型 === tp) &&
     (!q || hit(t.物料名稱 + ' ' + t.人員 + ' ' + t.工地 + ' ' + t.施工地點 + ' ' + t.備註, q)) &&
     (!f || t.時間.slice(0, 10) >= f) && (!t2 || t.時間.slice(0, 10) <= t2));
   const rows = all.slice(0, 500).map(t => {
